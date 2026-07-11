@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #fafafa; --surface: #ffffff; --raised: #f2f2f2;
+  --line: #e8e8e8; --line2: #d4d4d4;
+  --ink: #111111; --mut: #6f6f6f;
+  --accent: #131313; --accent2: #000000; --accent-fg: #ffffff;
+  --good: #0a8a5f; --bad: #d92d4c; --warn: #c77700;
+  --grid: #ececec; --chart1: #171717; --chart1soft: rgba(23,23,23,0.08);
+  --shadow-card: 0 1px 2px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.04);
+  --shadow-lift: 0 14px 34px rgba(0,0,0,0.10);
+  --glow: none;
+}
+.dark {
+  --bg: #0a0a0a; --surface: #131313; --raised: #1c1c1c;
+  --line: #262626; --line2: #3a3a3a;
+  --ink: #f2f2f2; --mut: #9a9a9a;
+  --accent: #f2f2f2; --accent2: #ffffff; --accent-fg: #111111;
+  --good: #3ddc97; --bad: #ff6b87; --warn: #ffbe3d;
+  --grid: #232323; --chart1: #ededed; --chart1soft: rgba(237,237,237,0.10);
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.5);
+  --shadow-lift: 0 18px 48px rgba(0,0,0,0.6);
+  --glow: radial-gradient(900px 420px at 70% -10%, rgba(255,255,255,0.045), transparent);
+}
+
+body {
+  background-color: var(--bg);
+  background-image: var(--glow);
+  background-repeat: no-repeat;
+  color: var(--ink);
+  font-size: 13px;
+  font-family: "Inter Variable", system-ui, sans-serif;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+::-webkit-scrollbar { width: 6px; height: 6px }
+::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 3px }
+
+.card { @apply bg-surface border border-line rounded-xl2 shadow-card; }
+.font-display { font-family: "Inter Variable", system-ui, sans-serif; font-weight: 740; letter-spacing: -0.035em; }
