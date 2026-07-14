@@ -43,6 +43,4 @@ With the key, the Ask AI panel streams real Claude analysis grounded in the sele
 - `app/api/ai/chat` — Anthropic API when key present, deterministic fallback otherwise.
 - `lib/store.ts` — Zustand: selected campaign drives AI panel visibility (only shows after a campaign is chosen).
 
-## Next (Phase 1)
 
-Meta OAuth → MetaAdapter implementing the same interface → BullMQ sync workers → Postgres. See `adlens-build-blueprint.md`.
