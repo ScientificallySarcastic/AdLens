@@ -97,7 +97,7 @@ export default function Check() {
               {plats.length === 0 ? "⚠ Select at least one platform" : cross ? `✓ ${plats.length} platforms → cross-platform comparison` : "✓ 1 platform → single campaign analysis"}
             </motion.p>
             <div className="flex justify-end">
-              <button disabled={plats.length === 0} onClick={() => setStep(1)} className="bg-accent hover:bg-accent2 disabled:opacity-40 text-white text-[12px] font-semibold rounded-lg px-4 py-2 transition-colors">Next: Select account →</button>
+              <button disabled={plats.length === 0} onClick={() => setStep(1)} className="bg-accent hover:bg-accent2 disabled:opacity-40 text-black text-[12px] font-semibold rounded-lg px-4 py-2 transition-colors">Next: Select account →</button>
             </div>
           </motion.div>
         )}
