@@ -127,7 +127,7 @@ export default function Check() {
             ))}
             <div className="flex justify-between">
               <button onClick={() => setStep(0)} className="text-[12px] font-semibold border border-line2 rounded-full px-4 py-2 hover:bg-raised transition-colors">← Back</button>
-              <button disabled={!accountsChosen} onClick={() => setStep(2)} className="bg-accent hover:bg-accent2 disabled:opacity-40 text-white text-[12px] font-semibold rounded-lg px-4 py-2">Next: Select campaign →</button>
+              <button disabled={!accountsChosen} onClick={() => setStep(2)} className="bg-accent hover:bg-accent2 disabled:opacity-40 text-black text-[12px] font-semibold rounded-lg px-4 py-2">Next: Select campaign →</button>
             </div>
           </motion.div>
         )}
