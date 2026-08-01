@@ -96,9 +96,11 @@ export interface GrantedAccount {
 /** Every ad account the user granted on the consent screen. */
 export async function fetchGrantedAdAccounts(token: string): Promise<GrantedAccount[]> {
   const out: GrantedAccount[] = [];
+  // NOTE: no `business` field — it requires business_management, which this
+  // ads_read-only token does not have. Requesting it fails the whole call.
   let url = `${GRAPH()}/me/adaccounts?${new URLSearchParams({
     access_token: token,
-    fields: "id,account_id,name,currency,timezone_name,account_status,business",
+    fields: "id,account_id,name,currency,timezone_name,account_status",
     limit: "200",
   })}`;
 

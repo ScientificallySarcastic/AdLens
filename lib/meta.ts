@@ -526,11 +526,20 @@ export type AccessibleAccount = {
 export async function fetchAccessibleAdAccounts(): Promise<AccessibleAccount[]> {
   if (!currentToken()) return [];
   const token = currentToken();
-  const url =
-    `${graphBase()}/me/adaccounts` +
-    `?fields=account_id,name,currency,timezone_name,account_status,business{id,name}` +
-    `&limit=200&access_token=${encodeURIComponent(token)}`;
-  const rows = await graphGetAll(url);
+  const build = (fields: string) =>
+    `${graphBase()}/me/adaccounts?fields=${fields}&limit=200&access_token=${encodeURIComponent(token)}`;
+
+  // `business` needs business_management, which an OAuth ads_read token does not
+  // carry. It is only a display label, so fall back rather than fail the whole
+  // account list. System User tokens keep showing it.
+  const base = "account_id,name,currency,timezone_name,account_status";
+  let rows: any[];
+  try {
+    rows = await graphGetAll(build(`${base},business{id,name}`));
+  } catch (e: any) {
+    if (e?.code === 100 || e?.kind === "permission") rows = await graphGetAll(build(base));
+    else throw e;
+  }
   return rows.map((r: any) => ({
     id: String(r.account_id ?? String(r.id ?? "").replace(/^act_/, "")),
     name: String(r.name ?? r.account_id ?? "Ad account"),
