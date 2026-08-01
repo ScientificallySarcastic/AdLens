@@ -20,6 +20,7 @@ by the 15-minute TTL for OAuth tokens.
 ## Setup
 
 - **Demo mode (no DB):** works out of the box — partners live in memory and reset on restart.
+- **UI dashboard:** go to `http://localhost:3000/admin/partners` → enter your `PARTNER_ADMIN_TOKEN` → add partners via form (no CLI needed!)
 - **Production:** run `db/partner-auth.sql` once in the Neon SQL Editor, then set:
 
 ```
@@ -28,7 +29,16 @@ PARTNER_ADMIN_TOKEN=<random>       # guards the provisioning endpoint
 PARTNER_JWT_SECRET=<random>        # signs OAuth access tokens
 ```
 
-## 1. Create a partner (internal/admin — your onboarding flow calls this)
+## 1. Create a partner — two ways
+
+### Option A: Dashboard (no code, for campaign managers)
+1. Go to `http://your-adlens.app/admin/partners`
+2. Enter your admin token
+3. Fill in the form: Partner Name + optional Campaign Scope
+4. Click "Create Partner" → credentials appear on screen, copy them
+5. Share API key or OAuth secret to the partner
+
+### Option B: API (for automation / onboarding pipelines)
 
 ```bash
 curl -X POST http://localhost:3000/api/partners \
