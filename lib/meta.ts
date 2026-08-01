@@ -8,6 +8,8 @@ import { getSql } from "./db";
 import type { Campaign, AdSet, AdItem } from "./data";
 import type { DayPoint } from "./datasource";
 import { resultLadder } from "./meta-labels";
+import { computePacing, daysBetween, daysElapsedSince, type Pacing } from "./pacing";
+import { mapMetaStatus } from "./status";
 export { resultLadder }; // type-only import — no runtime cycle
 
 const graphBase = () => `https://graph.facebook.com/${process.env.META_API_VERSION || "v23.0"}`;
@@ -55,6 +57,54 @@ export async function useConnectedAccount(accountId?: string | null): Promise<bo
 }
 
 export const LIVE_PREFIX = "meta_"; // live ids can never collide with seeded ids
+
+/* ── Schema drift guard ─────────────────────────────────────────────
+   db/meta-sync.sql created the ORIGINAL columns; the code has since grown to
+   write more (ad_account_id, actions, cpm/reach/frequency/conv_value, creative
+   fields). A database made from the old file therefore fails inserts, and —
+   worse — makes the account-scoped reads throw, which silently degrades to an
+   UNSCOPED read that mixes two ad accounts' campaigns together.
+   Adding the columns on first use closes both holes. All statements are
+   idempotent, so this is safe to run on every cold start. */
+let metaSchemaReady: Promise<void> | null = null;
+
+export function ensureMetaSchema(): Promise<void> {
+  if (!metaSchemaReady) {
+    metaSchemaReady = (async () => {
+      const sql = getSql();
+      await sql`ALTER TABLE meta_campaigns   ADD COLUMN IF NOT EXISTS ad_account_id     TEXT`;
+      // Status + budget/schedule: required for correct status display and for
+      // time-aware pacing at campaign and ad set level.
+      await sql`ALTER TABLE meta_campaigns   ADD COLUMN IF NOT EXISTS effective_status  TEXT`;
+      await sql`ALTER TABLE meta_campaigns   ADD COLUMN IF NOT EXISTS lifetime_budget   NUMERIC DEFAULT 0`;
+      await sql`ALTER TABLE meta_campaigns   ADD COLUMN IF NOT EXISTS start_time        TIMESTAMPTZ`;
+      await sql`ALTER TABLE meta_campaigns   ADD COLUMN IF NOT EXISTS stop_time         TIMESTAMPTZ`;
+      await sql`ALTER TABLE meta_adsets      ADD COLUMN IF NOT EXISTS effective_status  TEXT`;
+      await sql`ALTER TABLE meta_adsets      ADD COLUMN IF NOT EXISTS lifetime_budget   NUMERIC DEFAULT 0`;
+      await sql`ALTER TABLE meta_adsets      ADD COLUMN IF NOT EXISTS start_time        TIMESTAMPTZ`;
+      await sql`ALTER TABLE meta_adsets      ADD COLUMN IF NOT EXISTS stop_time         TIMESTAMPTZ`;
+      await sql`ALTER TABLE meta_daily_metrics ADD COLUMN IF NOT EXISTS cpm            NUMERIC DEFAULT 0`;
+      await sql`ALTER TABLE meta_daily_metrics ADD COLUMN IF NOT EXISTS reach          BIGINT  DEFAULT 0`;
+      await sql`ALTER TABLE meta_daily_metrics ADD COLUMN IF NOT EXISTS frequency      NUMERIC DEFAULT 0`;
+      await sql`ALTER TABLE meta_daily_metrics ADD COLUMN IF NOT EXISTS conv_value     NUMERIC DEFAULT 0`;
+      await sql`ALTER TABLE meta_daily_metrics ADD COLUMN IF NOT EXISTS actions        JSONB   DEFAULT '{}'::jsonb`;
+      await sql`ALTER TABLE meta_adsets      ADD COLUMN IF NOT EXISTS daily_budget      NUMERIC DEFAULT 0`;
+      await sql`ALTER TABLE meta_adsets      ADD COLUMN IF NOT EXISTS optimization_goal TEXT`;
+      await sql`ALTER TABLE meta_adsets      ADD COLUMN IF NOT EXISTS destination_type  TEXT`;
+      await sql`ALTER TABLE meta_adset_daily ADD COLUMN IF NOT EXISTS actions           JSONB DEFAULT '{}'::jsonb`;
+      await sql`ALTER TABLE meta_ads         ADD COLUMN IF NOT EXISTS thumbnail_url     TEXT`;
+      await sql`ALTER TABLE meta_ads         ADD COLUMN IF NOT EXISTS title             TEXT`;
+      await sql`ALTER TABLE meta_ads         ADD COLUMN IF NOT EXISTS body              TEXT`;
+      await sql`ALTER TABLE meta_ads         ADD COLUMN IF NOT EXISTS permalink         TEXT`;
+      await sql`ALTER TABLE meta_ad_daily    ADD COLUMN IF NOT EXISTS actions           JSONB DEFAULT '{}'::jsonb`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_meta_campaigns_account ON meta_campaigns(ad_account_id)`;
+    })().catch((e) => {
+      metaSchemaReady = null; // retry next request rather than caching failure
+      throw e;
+    });
+  }
+  return metaSchemaReady;
+}
 
 /** The ad account currently configured. Every live read is scoped to it, so
  *  connecting a different account cannot surface the previous account's rows
@@ -271,23 +321,37 @@ export type MetaCampaignShell = {
   id: string;
   name: string;
   status: string;
+  /** What Meta is ACTUALLY doing with it — the value the UI must display. */
+  effectiveStatus: string;
   objective: string;
   dailyBudget: number; // dollars (Meta reports minor units — cents — we divide by 100)
+  lifetimeBudget: number;
+  startTime: string | null;
+  stopTime: string | null;
 };
 
 export async function fetchMetaCampaignList(): Promise<MetaCampaignShell[]> {
   const token = currentToken();
   const acct = currentAccountId();
+  // effective_status is the truth the UI needs: `status` says what the campaign
+  // is set to, effective_status says what Meta is actually doing with it
+  // (CAMPAIGN_PAUSED, ARCHIVED, IN_PROCESS, WITH_ISSUES…). lifetime_budget and
+  // the schedule are required for time-aware pacing.
   const url =
     `${graphBase()}/act_${acct}/campaigns` +
-    `?fields=id,name,status,objective,daily_budget&limit=100&access_token=${encodeURIComponent(token)}`;
+    `?fields=id,name,status,effective_status,objective,daily_budget,lifetime_budget,start_time,stop_time` +
+    `&limit=100&access_token=${encodeURIComponent(token)}`;
   const rows = await graphGetAll(url);
   return rows.map((r: any) => ({
     id: String(r.id),
     name: String(r.name ?? r.id),
     status: String(r.status ?? "ACTIVE"),
+    effectiveStatus: String(r.effective_status ?? r.status ?? "ACTIVE"),
     objective: prettyObjective(r.objective),
     dailyBudget: num(r.daily_budget) / 100,
+    lifetimeBudget: num(r.lifetime_budget) / 100,
+    startTime: r.start_time ? String(r.start_time) : null,
+    stopTime: r.stop_time ? String(r.stop_time) : null,
   }));
 }
 
@@ -364,8 +428,13 @@ type LiveRow = {
   id: string;
   name: string;
   status: string;
+  /** Meta's effective_status — what the platform is actually doing. */
+  effective_status?: string | null;
   objective: string;
   daily_budget: number;
+  lifetime_budget?: number;
+  start_time?: string | null;
+  stop_time?: string | null;
   account_currency?: string;
   metrics: (MetaInsightRow & { conv_value?: number })[]; // per-day, oldest → newest
 };
@@ -435,10 +504,26 @@ function toCampaign(row: LiveRow): Campaign {
   const impressions = days.reduce((s, d) => s + d.impressions, 0);
   const conv = days.reduce((s, d) => s + d.conversions, 0);
   const roas = spend > 0 ? revenue / spend : 0;
-  const status: Campaign["status"] = row.status === "ACTIVE" ? "Active" : "Paused";
-  const latest = days[days.length - 1];
-  const pacing =
-    row.daily_budget > 0 && latest ? Math.round((latest.spend / row.daily_budget) * 100) : 0;
+  // Status comes from effective_status when Meta reported it — `status` alone
+  // says what the user set, not what the platform is doing.
+  const status = mapMetaStatus(row.effective_status, row.status);
+
+  // Pacing: actual spend vs the spend the budget implies for the elapsed time.
+  // Previously this was last-night's spend ÷ daily budget, which ignored time
+  // entirely and read 0% whenever the budget lived at ad set level.
+  const deliveredDays = days.filter((d) => num(d.spend) > 0).length || days.length;
+  const pacingResult = computePacing({
+    spend,
+    dailyBudget: row.daily_budget,
+    lifetimeBudget: num(row.lifetime_budget),
+    daysElapsed: row.lifetime_budget
+      ? daysElapsedSince(row.start_time, row.stop_time) || deliveredDays
+      : deliveredDays,
+    totalDays: daysBetween(row.start_time, row.stop_time),
+  });
+  // Campaign.pacing stays a number for existing consumers; the full object is
+  // carried alongside so the UI can explain "no budget" instead of showing 0%.
+  const pacing = pacingResult.percent ?? 0;
 
   // spark: last ≤7 daily spends normalized 0–100, left-padded to 7 like seeded rows
   const last7 = days.slice(-7).map((d) => d.spend);
@@ -471,6 +556,7 @@ function toCampaign(row: LiveRow): Campaign {
     cpc: clicks > 0 ? +(spend / clicks).toFixed(2) : 0,
     conv,
     pacing,
+    pacingDetail: pacingResult,
     health: healthOf({
       status,
       revenueTracked: revenueReported,
@@ -521,6 +607,9 @@ export type AccessibleAccount = {
   timezone: string;
   status: number;        // 1 = active, 2 = disabled, 3 = unsettled, ...
   business: string | null;
+  /** Set when this account came from an OAuth connection, so the UI knows it
+   *  can be disconnected. null for accounts reached via the env credential. */
+  connectionId?: string | null;
 };
 
 export async function fetchAccessibleAdAccounts(): Promise<AccessibleAccount[]> {
@@ -557,6 +646,9 @@ export async function accountCurrency(): Promise<string> {
 }
 
 export async function loadLiveCampaigns(): Promise<Campaign[]> {
+  // Bring the schema up to date FIRST: without ad_account_id the scoped query
+  // below throws and the unscoped fallback would mix accounts together.
+  await ensureMetaSchema().catch(() => {});
   let rows: Record<string, any>[];
   try {
     rows = (await loadLiveCampaignRowsFull()) as Record<string, any>[];
@@ -760,6 +852,9 @@ function mapSeries(rows: Record<string, any>[]): DayPoint[] {
 
 export type MetaAdsetShell = {
   id: string; campaignId: string; name: string; status: string; dailyBudget: number;
+  /** Ad-set-level pacing needs the same inputs as campaign pacing. */
+  effectiveStatus: string; lifetimeBudget: number;
+  startTime: string | null; stopTime: string | null;
   /** What this ad set optimises for, and where it sends people. These decide
    *  what counts as a "result" — a WhatsApp ad set's result is a messaging
    *  conversation, not a purchase. */
@@ -774,7 +869,7 @@ export async function fetchAdsetsForCampaign(campaignId: string): Promise<MetaAd
   const token = currentToken();
   const url =
     `${graphBase()}/${campaignId}/adsets` +
-    `?fields=id,name,status,daily_budget,optimization_goal,destination_type,promoted_object` +
+    `?fields=id,name,status,effective_status,daily_budget,lifetime_budget,start_time,end_time,optimization_goal,destination_type,promoted_object` +
     `&limit=200&access_token=${encodeURIComponent(token)}`;
   const rows = await graphGetAll(url);
   return rows.map((r: any) => ({
@@ -782,7 +877,12 @@ export async function fetchAdsetsForCampaign(campaignId: string): Promise<MetaAd
     campaignId, // from the edge, not from the payload
     name: String(r.name ?? r.id),
     status: String(r.status ?? "ACTIVE"),
+    effectiveStatus: String(r.effective_status ?? r.status ?? "ACTIVE"),
     dailyBudget: num(r.daily_budget) / 100,
+    lifetimeBudget: num(r.lifetime_budget) / 100,
+    startTime: r.start_time ? String(r.start_time) : null,
+    // Ad sets call it end_time; campaigns call it stop_time.
+    stopTime: r.end_time ? String(r.end_time) : null,
     optimizationGoal: String(r.optimization_goal ?? ""),
     // destination_type is not always present; promoted_object often reveals it.
     destinationType: String(
@@ -825,7 +925,7 @@ export async function fetchMetaAdsets(): Promise<MetaAdsetShell[]> {
   const acct = currentAccountId();
   const url =
     `${graphBase()}/act_${acct}/adsets` +
-    `?fields=id,name,campaign_id,status,daily_budget,optimization_goal,destination_type` +
+    `?fields=id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,start_time,end_time,optimization_goal,destination_type` +
     `&limit=200&access_token=${encodeURIComponent(token)}`;
   const rows = await graphGetAll(url);
   return rows.map((r: any) => ({
@@ -833,6 +933,10 @@ export async function fetchMetaAdsets(): Promise<MetaAdsetShell[]> {
     campaignId: String(r.campaign_id),
     name: String(r.name ?? r.id),
     status: String(r.status ?? "ACTIVE"),
+    effectiveStatus: String(r.effective_status ?? r.status ?? "ACTIVE"),
+    lifetimeBudget: num(r.lifetime_budget) / 100,
+    startTime: r.start_time ? String(r.start_time) : null,
+    stopTime: r.end_time ? String(r.end_time) : null,
     dailyBudget: num(r.daily_budget) / 100, // Meta reports minor units
     optimizationGoal: String(r.optimization_goal ?? ""),
     destinationType: String(r.destination_type ?? ""),
@@ -993,7 +1097,8 @@ export async function loadLiveAdsets(
   let setRows: Record<string, any>[];
   try {
     setRows = (await sql`
-    SELECT s.id, s.name, s.status, s.daily_budget, s.optimization_goal, s.destination_type,
+    SELECT s.id, s.name, s.status, s.effective_status, s.daily_budget, s.lifetime_budget,
+           s.start_time, s.stop_time, s.optimization_goal, s.destination_type,
            COALESCE(json_agg(json_build_object(
              'date', to_char(d.date,'YYYY-MM-DD'), 'spend', d.spend,
              'impressions', d.impressions, 'clicks', d.clicks, 'conversions', d.conversions,
@@ -1004,7 +1109,8 @@ export async function loadLiveAdsets(
     JOIN meta_campaigns c2 ON c2.id = s.campaign_id AND c2.ad_account_id = ${currentAccountId()}
     LEFT JOIN meta_adset_daily d ON d.adset_id = s.id AND d.date BETWEEN ${lo} AND ${hi}
     WHERE s.campaign_id = ${campaignId}
-    GROUP BY s.id, s.name, s.status, s.daily_budget
+    GROUP BY s.id, s.name, s.status, s.effective_status, s.daily_budget, s.lifetime_budget,
+             s.start_time, s.stop_time, s.optimization_goal, s.destination_type
     ORDER BY s.name`) as unknown as Record<string, any>[];
   } catch {
     setRows = (await sql`
@@ -1145,9 +1251,24 @@ export async function loadLiveAdsets(
     const ladder = resultLadder(undefined, String(r.optimization_goal ?? ""), String(r.destination_type ?? ""));
     const ownResults = ladder.types.reduce((acc, t) => acc || actionTotals[t] || 0, 0);
 
+    // Ad-set-level pacing, on the same time-aware basis as campaign pacing.
+    const setDeliveredDays = daily.filter((d: any) => num(d.spend) > 0).length || daily.length;
+    const setPacing = computePacing({
+      spend,
+      dailyBudget: num(r.daily_budget),
+      lifetimeBudget: num(r.lifetime_budget),
+      daysElapsed: num(r.lifetime_budget)
+        ? daysElapsedSince(r.start_time, r.stop_time) || setDeliveredDays
+        : setDeliveredDays,
+      totalDays: daysBetween(r.start_time, r.stop_time),
+    });
+
     return {
       id: `${LIVE_PREFIX}${r.id}`,
       campaignId: liveCampaignId,
+      status: mapMetaStatus(r.effective_status, r.status),
+      pacing: setPacing.percent ?? 0,
+      pacingDetail: setPacing,
       actionTotals,
       resultLabel: ladder.label,
       resultBasis: ladder.basis,
@@ -1184,16 +1305,25 @@ type AccountInfo = { id: string; name: string; currency: string; timezone: strin
 // page load. Cache it: in-memory for the life of the lambda, and persisted in
 // sync_log so a cold start reads the DB instead of calling Meta again.
 const ACCOUNT_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
-let accountMemo: { at: number; value: AccountInfo } | null = null;
 
-async function readAccountCache(): Promise<AccountInfo | null> {
+// MUST be keyed by ad account. A single shared slot made the first account
+// fetched win for every other one — showing its name, and worse, its CURRENCY
+// and TIMEZONE against another account's numbers.
+const accountMemo = new Map<string, { at: number; value: AccountInfo }>();
+
+/** sync_log key for one account's cached identity. */
+const accountCacheKey = (acct: string) => `account:${acct}`;
+
+async function readAccountCache(acct: string): Promise<AccountInfo | null> {
   try {
     const rows = (await getSql()`
-      SELECT detail, last_synced FROM sync_log WHERE source = 'account'`) as unknown as any[];
+      SELECT detail, last_synced FROM sync_log WHERE source = ${accountCacheKey(acct)}`) as unknown as any[];
     if (!rows.length) return null;
     const age = Date.now() - new Date(String(rows[0].last_synced)).getTime();
     if (age > ACCOUNT_TTL_MS) return null;
-    return JSON.parse(String(rows[0].detail)) as AccountInfo;
+    const value = JSON.parse(String(rows[0].detail)) as AccountInfo;
+    // Belt and braces: never hand back a row that belongs to another account.
+    return String(value.id) === String(acct) ? value : null;
   } catch {
     return null;
   }
@@ -1203,7 +1333,7 @@ async function writeAccountCache(v: AccountInfo): Promise<void> {
   try {
     await getSql()`
       INSERT INTO sync_log (source, last_synced, detail)
-      VALUES ('account', now(), ${JSON.stringify(v)})
+      VALUES (${accountCacheKey(v.id)}, now(), ${JSON.stringify(v)})
       ON CONFLICT (source) DO UPDATE SET last_synced = now(), detail = EXCLUDED.detail`;
   } catch {
     // sync_log missing — caching is an optimisation, not a requirement
@@ -1218,9 +1348,10 @@ export async function fetchAccountInfo(force = false): Promise<AccountInfo | nul
   const acct = currentAccountId();
 
   if (!force) {
-    if (accountMemo && Date.now() - accountMemo.at < ACCOUNT_TTL_MS) return accountMemo.value;
-    const cached = await readAccountCache();
-    if (cached) { accountMemo = { at: Date.now(), value: cached }; return cached; }
+    const memo = accountMemo.get(acct);
+    if (memo && Date.now() - memo.at < ACCOUNT_TTL_MS) return memo.value;
+    const cached = await readAccountCache(acct);
+    if (cached) { accountMemo.set(acct, { at: Date.now(), value: cached }); return cached; }
   }
 
   const token = currentToken();
@@ -1236,7 +1367,7 @@ export async function fetchAccountInfo(force = false): Promise<AccountInfo | nul
       // it means dates can be labelled correctly for any account.
       timezone: String(json?.timezone_name ?? "UTC"),
     };
-    accountMemo = { at: Date.now(), value };
+    accountMemo.set(acct, { at: Date.now(), value });
     await writeAccountCache(value);
     return value;
   } catch {

@@ -1,8 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildEvidence } from "@/lib/reasoning";
+import { parseQuery, retrieveData } from "@/lib/aiPipeline";
+
+export const dynamic = "force-dynamic";
+
+// Reports are built from retrieved data on the same terms as the chat pipeline:
+// live Meta data is pulled (and re-synced when stale) BEFORE anything is
+// composed. Every sentence below interpolates computed evidence — there is no
+// stored or invented narrative.
 
 export async function POST(req: NextRequest) {
   const { campaignId, compare } = await req.json();
+
+  const retrieval = await retrieveData(
+    String(campaignId),
+    parseQuery("full performance report", []),
+    new URL(req.url).origin,
+  );
+  if (!retrieval.ok) {
+    return NextResponse.json(
+      { error: "retrieval-failed", detail: retrieval.error ?? "Could not retrieve data from the Meta Ads API." },
+      { status: 502 },
+    );
+  }
+
   const ev = await buildEvidence(campaignId);
   if (!ev) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
 
@@ -73,5 +94,9 @@ export async function POST(req: NextRequest) {
     { stars: 2, text: ev.trends.length ? `Monitor: ${ev.trends[0]}` : "No trend requiring monitoring" },
   ];
 
-  return NextResponse.json({ sections, priorities, snapshot: ev.snapshot, campaign: c, compareRows, currency: ev.reporting.currency });
+  return NextResponse.json({
+    sections, priorities, snapshot: ev.snapshot, campaign: c, compareRows,
+    currency: ev.reporting.currency,
+    retrieval: { live: retrieval.isLive, refreshed: retrieval.refreshed, syncedAt: retrieval.syncedAt },
+  });
 }

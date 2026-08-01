@@ -314,6 +314,9 @@ export async function buildEvidence(campaignId: string): Promise<Evidence | null
 // ── Deterministic analyst (fallback + always-on baseline) ───────────
 type A = { observation: string; evidence: string[]; causes: string[]; confidence: "High" | "Medium" | "Low"; recommendations: string[]; impact: string };
 
+/** Computes findings from the evidence pack. These feed the model as
+ *  structured input — they are never rendered to the user as prose, so no
+ *  canned answer can reach the UI. */
 export function analyze(question: string, ev: Evidence): A {
   const q = question.toLowerCase();
   const tracked = ev.reporting.revenueTracked;
@@ -583,22 +586,6 @@ export function analyze(question: string, ev: Evidence): A {
   };
 }
 
-export function formatAnalyst(a: A): string {
-  return [
-    `**Observation** — ${a.observation}`,
-    ``,
-    `**Evidence**`,
-    ...a.evidence.map(e => `• ${e}`),
-    ``,
-    `**Likely causes** — ${a.causes.join("; ")}.`,
-    `**Confidence:** ${a.confidence}`,
-    ``,
-    `**Recommendations**`,
-    ...a.recommendations.map((r, i) => `${i + 1}. ${r}`),
-    ``,
-    `**Expected impact** — ${a.impact}`,
-  ].join("\n");
-}
 
 export const ANALYST_SYSTEM = `You are the AdLens AI — a Senior Performance Marketing Manager with 10+ years running Meta, Google and LinkedIn campaigns. Never answer like a generic chatbot.
 

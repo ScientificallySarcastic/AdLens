@@ -11,9 +11,25 @@ export function PlatBadge({ p }: { p: "meta" | "li" }) {
   );
 }
 
+/** Delivery status straight from Meta's effective_status. Archived and In
+ *  Review are distinct states — collapsing them into "Paused" hid the fact
+ *  that an account had nothing running. */
 export function StatusBadge({ s }: { s: string }) {
-  return <span className={clsx("text-[10px] font-bold px-2 py-0.5 rounded-md",
-    s === "Active" ? "bg-good/12 text-good" : "bg-raised text-mut")}>{s}</span>;
+  const tone =
+    s === "Active" ? "bg-good/12 text-good"
+    : s === "In Review" || s === "Incomplete" ? "bg-warn/12 text-warn"
+    : "bg-raised text-mut";
+  return <span className={clsx("text-[10px] font-bold px-2 py-0.5 rounded-md", tone)}>{s}</span>;
+}
+
+/** Shown on an account with zero Active campaigns — previously such an account
+ *  still rendered an "Active" pill. */
+export function NoActiveCampaigns({ total }: { total: number }) {
+  return (
+    <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-raised text-mut">
+      No active campaigns{total > 0 ? ` · ${total} inactive` : ""}
+    </span>
+  );
 }
 
 export function Delta({ v, dir }: { v: string; dir: "up" | "dn" | "flat" }) {

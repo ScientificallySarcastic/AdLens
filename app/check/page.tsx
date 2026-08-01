@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Check as CheckIcon, Search } from "lucide-react";
 import { campaigns } from "@/lib/data";
 import { useApp } from "@/lib/store";
-import { PlatBadge, StatusBadge } from "@/components/Badge";
+import { PlatBadge, StatusBadge, NoActiveCampaigns } from "@/components/Badge";
 import PageHeader from "@/components/PageHeader";
 import clsx from "clsx";
 
@@ -41,7 +41,7 @@ export default function Check() {
   type LiveCamp = typeof campaigns[number];
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
-  const [live, setLive] = useState<{ configured: boolean; account?: { id: string; name: string; currency: string }; campaigns: LiveCamp[]; liveError?: string | null; lastSynced?: string | null; accessibleAccounts?: { id: string; name: string; currency: string; timezone: string; status: number; business: string | null }[]; discoveryError?: string | null } | null>(null);
+  const [live, setLive] = useState<{ configured: boolean; account?: { id: string; name: string; currency: string }; campaigns: LiveCamp[]; liveError?: string | null; lastSynced?: string | null; accessibleAccounts?: { id: string; name: string; currency: string; timezone: string; status: number; business: string | null; connectionId?: string | null }[]; discoveryError?: string | null } | null>(null);
   const chosenAccount = String(acctByPlat["meta"] ?? "");
   useEffect(() => {
     const acct = chosenAccount.startsWith("live:") ? chosenAccount.slice(5) : "";
@@ -56,6 +56,7 @@ export default function Check() {
     id: `live:${a.id}`,
     name: a.name,
     sub: `act_${a.id} · ${a.currency} · ${a.timezone}${a.business ? ` · ${a.business}` : ""}${a.status !== 1 ? " · inactive" : ""}`,
+    connectionId: a.connectionId ?? null,
   }));
   async function syncNow(accountId: string) {
     setSyncing(true);
@@ -83,6 +84,9 @@ export default function Check() {
       setSyncing(false);
     }
   }
+
+  // Status of the selected account comes from the campaigns Meta last reported.
+  const activeCampaignCount = (live?.campaigns ?? []).filter((c) => c.status === "Active").length;
 
   const syncAgeHours = live?.lastSynced
     ? (Date.now() - new Date(live.lastSynced).getTime()) / 3_600_000
@@ -120,18 +124,42 @@ export default function Check() {
     window.history.replaceState({}, "", window.location.pathname);
   }, []);
 
-  async function disconnect(id: string) {
-    await fetch(`/api/connections?id=${encodeURIComponent(id)}`, { method: "DELETE" });
-    await refreshConnections();
-    const fresh = await fetch(`/api/db/accounts?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.json()).catch(() => null);
-    if (fresh) setLive(fresh);
-    setAcctByPlat((prev) => ({ ...prev, meta: "" }));
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
+
+  /** Disconnect one connected Meta account. The stored token is deleted server
+   *  side; the picker refreshes immediately so the account disappears. */
+  async function disconnect(connectionId: string, label: string) {
+    if (!connectionId || disconnecting) return;
+    if (!window.confirm(`Disconnect ${label}? AdLens will lose access to its data until it is reconnected.`)) return;
+    setDisconnecting(connectionId);
+    setConnectMsg(null);
+    try {
+      const res = await fetch(`/api/connections?id=${encodeURIComponent(connectionId)}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error ?? `Disconnect failed (${res.status})`);
+      }
+      // Drop the selection if the account that was selected is now gone.
+      setAcctByPlat((prev) => (String(prev.meta ?? "").startsWith("live:") ? { ...prev, meta: "" } : prev));
+      await refreshConnections();
+      const fresh = await fetch(`/api/db/accounts?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.json()).catch(() => null);
+      if (fresh) setLive(fresh);
+      setConnectMsg({ kind: "success", text: `${label} disconnected. Its stored access token has been removed.` });
+    } catch (e: unknown) {
+      setConnectMsg({ kind: "error", text: e instanceof Error ? e.message : "Could not disconnect that account." });
+    } finally {
+      setDisconnecting(null);
+    }
   }
 
-  const liveAcct = liveAccts.length === 0 && live?.configured && live.account
-    ? [{ id: "live", name: live.account.name, sub: `act_${live.account.id} · ${live.account.currency}` }]
+  // One shape for every row in the picker: demo accounts simply carry no
+  // connectionId, which is what decides whether Disconnect is offered.
+  type PickerAccount = { id: string; name: string; sub: string; connectionId?: string | null };
+  const liveAcct: PickerAccount[] = liveAccts.length === 0 && live?.configured && live.account
+    ? [{ id: "live", name: live.account.name, sub: `act_${live.account.id} · ${live.account.currency}`, connectionId: null }]
     : liveAccts;
-  const accountsFor = (pid: string) => (pid === "meta" ? [...liveAcct, ...(ACCOUNTS[pid] ?? [])] : ACCOUNTS[pid] ?? []);
+  const accountsFor = (pid: string): PickerAccount[] =>
+    pid === "meta" ? [...liveAcct, ...(ACCOUNTS[pid] ?? [])] : ACCOUNTS[pid] ?? [];
   const usingLive = String(acctByPlat["meta"] ?? "").startsWith("live");
   const pool = usingLive ? (live?.campaigns ?? []) : campaigns;
   const curSym = live?.account?.currency === "INR" ? "₹" : "$";
@@ -251,7 +279,20 @@ export default function Check() {
                             {syncing ? "Syncing…" : "Sync now"}
                           </button>
                         )}
-                        <StatusBadge s="Active" />
+                        {a.connectionId && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); disconnect(String(a.connectionId), a.name); }}
+                            disabled={disconnecting === a.connectionId}
+                            title="Remove this account's stored access token"
+                            className="text-[11px] font-bold px-2.5 py-1.5 rounded-lg border border-line2 hover:border-bad hover:text-bad disabled:opacity-40 transition-colors">
+                            {disconnecting === a.connectionId ? "Disconnecting…" : "Disconnect"}
+                          </button>
+                        )}
+                        {String(a.id).startsWith("live")
+                          ? (activeCampaignCount > 0
+                              ? <StatusBadge s="Active" />
+                              : <NoActiveCampaigns total={live?.campaigns?.length ?? 0} />)
+                          : <StatusBadge s="Active" />}
                       </span>
                     </button>
                   ))}
@@ -299,13 +340,8 @@ export default function Check() {
                     )}
 
                     {(conn?.connections?.length ?? 0) > 0 && (
-                      <div className="mt-3 pt-3 border-t border-line space-y-1.5">
-                        {conn!.connections.map((c) => (
-                          <div key={c.id} className="flex items-center justify-between gap-3 text-[11.5px]">
-                            <span className="font-semibold">Connected as {c.fbUserName || c.id}</span>
-                            <button onClick={() => disconnect(c.id)} className="text-mut hover:text-bad font-bold transition-colors">Disconnect</button>
-                          </div>
-                        ))}
+                      <div className="mt-3 pt-3 border-t border-line text-[11.5px] text-mut font-medium">
+                        Connected as {conn!.connections.map((c) => c.fbUserName || c.id).join(", ")} — use Disconnect on an account above to revoke access.
                       </div>
                     )}
                   </div>

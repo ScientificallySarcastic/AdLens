@@ -37,12 +37,16 @@ export async function GET(req: Request) {
     try {
       const { getConnectionStore } = await import("@/lib/connections");
       const connected = await getConnectionStore().listAccounts();
+      const byId = new Map(connected.map((c) => [c.id, c.connectionId]));
       const seen = new Set(accessible.map((a) => String(a.id)));
       for (const c of connected) {
         if (!seen.has(c.id)) {
           accessible.push({ id: c.id, name: c.name, currency: c.currency, timezone: c.timezone, business: c.business, status: c.status } as typeof accessible[number]);
         }
       }
+      // Tag each account with the connection that owns it, so the UI can offer
+      // a per-account Disconnect for OAuth accounts and omit it for env ones.
+      accessible = accessible.map((a) => ({ ...a, connectionId: byId.get(String(a.id)) ?? null })) as typeof accessible;
     } catch { /* connection store unavailable — env credentials still work */ }
 
     // Which account this request is about: explicit choice, else the default.

@@ -103,6 +103,9 @@ export async function GET(req: Request) {
 
   try {
     const sql = getSql();
+    // Add any columns this code writes that an older db/meta-sync.sql lacks
+    // (ad_account_id, actions, cpm/reach/frequency/conv_value, creative fields).
+    await (await import("@/lib/meta")).ensureMetaSchema();
     // Every row written is stamped with the ad account it came from, so live
     // reads can be scoped and two accounts' data can never be mixed.
     // Must be the account actually being read (OAuth-connected or env), never
@@ -120,11 +123,18 @@ export async function GET(req: Request) {
     }
     for (const c of shells) {
       await sql`
-        INSERT INTO meta_campaigns (id, name, status, objective, daily_budget, ad_account_id, updated_at)
-        VALUES (${c.id}, ${c.name}, ${c.status}, ${c.objective}, ${c.dailyBudget}, ${acctId}, now())
+        INSERT INTO meta_campaigns (id, name, status, effective_status, objective,
+                                    daily_budget, lifetime_budget, start_time, stop_time,
+                                    ad_account_id, updated_at)
+        VALUES (${c.id}, ${c.name}, ${c.status}, ${c.effectiveStatus}, ${c.objective},
+                ${c.dailyBudget}, ${c.lifetimeBudget}, ${c.startTime}, ${c.stopTime},
+                ${acctId}, now())
         ON CONFLICT (id) DO UPDATE
         SET name = EXCLUDED.name, status = EXCLUDED.status,
+            effective_status = EXCLUDED.effective_status,
             objective = EXCLUDED.objective, daily_budget = EXCLUDED.daily_budget,
+            lifetime_budget = EXCLUDED.lifetime_budget,
+            start_time = EXCLUDED.start_time, stop_time = EXCLUDED.stop_time,
             ad_account_id = EXCLUDED.ad_account_id, updated_at = now()`;
     }
     const known = new Set(shells.map((c) => c.id));
@@ -173,12 +183,17 @@ export async function GET(req: Request) {
     let adsetsWritten = 0;
     for (const s of adsetShells) {
       await sql`
-        INSERT INTO meta_adsets (id, campaign_id, name, status, daily_budget,
+        INSERT INTO meta_adsets (id, campaign_id, name, status, effective_status, daily_budget,
+                                 lifetime_budget, start_time, stop_time,
                                  optimization_goal, destination_type, updated_at)
-        VALUES (${s.id}, ${s.campaignId}, ${s.name}, ${s.status}, ${s.dailyBudget},
+        VALUES (${s.id}, ${s.campaignId}, ${s.name}, ${s.status}, ${s.effectiveStatus}, ${s.dailyBudget},
+                ${s.lifetimeBudget}, ${s.startTime}, ${s.stopTime},
                 ${s.optimizationGoal}, ${s.destinationType}, now())
         ON CONFLICT (id) DO UPDATE
         SET name = EXCLUDED.name, status = EXCLUDED.status,
+            effective_status = EXCLUDED.effective_status,
+            lifetime_budget = EXCLUDED.lifetime_budget,
+            start_time = EXCLUDED.start_time, stop_time = EXCLUDED.stop_time,
             campaign_id = EXCLUDED.campaign_id, daily_budget = EXCLUDED.daily_budget,
             optimization_goal = EXCLUDED.optimization_goal,
             destination_type = EXCLUDED.destination_type,

@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
-import { Home, LayoutGrid, FileText, BookOpen, Bell, Search, Zap, TrendingUp, KeyRound } from "lucide-react";
+import { Home, LayoutGrid, FileText, BookOpen, Bell, Search, Zap, TrendingUp } from "lucide-react";
 import ThemeToggle from "./ThemeToggle";
 import clsx from "clsx";
 import { useApp } from "@/lib/store";
@@ -23,12 +23,6 @@ const groups: { label: string; items: { href: string; label: string; icon: typeo
       { href: "/reporting", label: "Reports", icon: FileText },
       { href: "/ledger", label: "Ledger", icon: BookOpen },
       { href: "/alerts", label: "Alerts", icon: Bell, badge: alerts.length },
-    ],
-  },
-  {
-    label: "Admin",
-    items: [
-      { href: "/admin/partners", label: "Partners", icon: KeyRound },
     ],
   },
 ];

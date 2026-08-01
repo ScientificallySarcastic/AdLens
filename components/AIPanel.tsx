@@ -5,7 +5,11 @@ import { Sparkles, X, Send } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { providerLabel } from "@/lib/llm";
 
-interface Msg { role: "user" | "ai"; text: string; verified?: boolean; engine?: string; provider?: string; intent?: string; fallbackReason?: string | null }
+interface Msg {
+  role: "user" | "ai"; text: string; verified?: boolean; engine?: string; provider?: string;
+  intent?: string; fallbackReason?: string | null;
+  retrieval?: { live: boolean; refreshed: boolean; syncedAt: string | null };
+}
 
 const SUGGESTIONS = [
   "Why is CPM increasing?",
@@ -46,12 +50,16 @@ export default function AIPanel() {
     setInput(""); setBusy(true);
     try {
       const res = await fetch("/api/ai/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ campaignId, question: q }) });
-      if (!res.ok) {
-        const body = await res.text();
-        throw new Error(`API ${res.status}: ${body.slice(0, 140)}`);
-      }
-      const data = await res.json();
-      setMsgs((m) => [...m, { role: "ai", text: data.reply, verified: data.verified, engine: data.engine, provider: data.provider, intent: data.intent, fallbackReason: data.fallbackReason }]);
+      // The pipeline returns a usable `reply` on failure too (an explanation of
+      // what went wrong), so surface that rather than a raw status code.
+      const data = await res.json().catch(() => null);
+      if (!data) throw new Error(`API ${res.status}`);
+      setMsgs((m) => [...m, {
+        role: "ai", text: data.reply ?? "No answer was produced.",
+        verified: data.verified, engine: data.engine, provider: data.provider,
+        intent: data.intent, fallbackReason: data.fallbackReason ?? data.error ?? null,
+        retrieval: data.retrieval,
+      }]);
     } catch (err: any) {
       setMsgs((m) => [...m, { role: "ai", text: `Request failed — ${err?.message ?? "unknown error"}` }]);
     } finally { setBusy(false); }
@@ -92,6 +100,11 @@ export default function AIPanel() {
                     <div className={`text-[13px] leading-relaxed rounded-2xl px-3.5 py-2.5 ${m.role === "user" ? "text-white" : "bg-surface border border-line shadow-card"}`}
                       style={m.role === "user" ? { background: "var(--hero-grad)" } : undefined}
                       dangerouslySetInnerHTML={{ __html: render(m.text) }} />
+                    {m.role === "ai" && m.verified === false && m.fallbackReason && (
+                      <div className="text-[10px] mt-1.5 pl-1 font-semibold" style={{ color: "var(--warn)" }}>
+                        No answer was generated — nothing was invented to fill the gap.
+                      </div>
+                    )}
                     {m.role === "ai" && m.verified && i > 0 && (
                       <div className="text-[10px] text-mut mt-1.5 pl-1 font-medium">
                         {m.intent === "platform"
@@ -99,17 +112,14 @@ export default function AIPanel() {
                           : m.intent === "out_of_scope"
                             ? "Outside scope — no answer attempted"
                             : "✓ every figure verified against the data snapshot"}
+                        {m.engine === "pipeline" && <span className="ml-1.5 text-good">· {providerLabel(m.provider)} narrative</span>}
                         {m.engine === "llm" && <span className="ml-1.5 text-good">· {providerLabel(m.provider)} narrative</span>}
                         {m.engine === "glossary" && <span className="ml-1.5 text-mut">· built-in reference</span>}
                         {m.engine === "scope-guard" && <span className="ml-1.5 text-mut">· scope guard</span>}
-                        {m.engine === "analyst" && (
-                          <span className="ml-1.5 text-warn">
-                            · deterministic analyst
-                            {m.fallbackReason === "no-api-key" && " (no LLM key set — add GEMINI_API_KEY or GROQ_API_KEY)"}
-                            {m.fallbackReason === "api-error" && " (AI unreachable — fell back safely)"}
-                            {m.fallbackReason === "citation-rejected" && " (AI reply cited unverifiable numbers — rejected)"}
-                            {m.fallbackReason === "misattributed" && " (AI attributed a real number to the wrong ad set — rejected)"}
-                            {m.fallbackReason === "empty-reply" && " (AI returned nothing — fell back safely)"}
+                        {m.retrieval && (
+                          <span className="ml-1.5 text-mut">
+                            · {m.retrieval.live ? "live Meta data" : "seeded data"}
+                            {m.retrieval.refreshed && " (re-synced for this question)"}
                           </span>
                         )}
                       </div>
@@ -122,7 +132,7 @@ export default function AIPanel() {
                   <span className="flex gap-1">
                     {[0, 1, 2].map(i => <motion.span key={i} className="w-1.5 h-1.5 rounded-full bg-accent" animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1, delay: i * 0.2 }} />)}
                   </span>
-                  Analysing the snapshot…
+                  Fetching live campaign data, then analysing…
                 </div>
               )}
             </div>
