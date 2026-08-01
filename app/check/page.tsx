@@ -1,0 +1,298 @@
+"use client";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { motion, AnimatePresence } from "framer-motion";
+import { Check as CheckIcon, Search } from "lucide-react";
+import { campaigns } from "@/lib/data";
+import { useApp } from "@/lib/store";
+import { PlatBadge, StatusBadge } from "@/components/Badge";
+import PageHeader from "@/components/PageHeader";
+import clsx from "clsx";
+
+const PLATFORMS = [
+  { id: "meta", name: "Meta", color: "#1877F2", enabled: true },
+  { id: "li", name: "LinkedIn", color: "#0A66C2", enabled: true },
+  { id: "google", name: "Google Ads", color: "#EA4335", enabled: false },
+  { id: "tiktok", name: "TikTok", color: "#8b93a8", enabled: false },
+];
+const ACCOUNTS: Record<string, { id: string; name: string; sub: string }[]> = {
+  meta: [
+    { id: "m1", name: "Acme Corp — Main (demo)", sub: "act_12345678 · $4.2k/mo · synthetic benchmark" },
+    { id: "m2", name: "Acme Corp — Brand (demo)", sub: "act_87654321 · $1.1k/mo · synthetic benchmark" },
+  ],
+  li: [
+    { id: "l1", name: "Acme Corp LinkedIn", sub: "id_509876543 · $2.8k/mo" },
+    { id: "l2", name: "Acme Talent Brand", sub: "id_509811111 · $0.9k/mo" },
+  ],
+};
+
+export default function Check() {
+  const router = useRouter();
+  const setCampaign = useApp((s) => s.setCampaign);
+  const [step, setStep] = useState(0);
+  const [plats, setPlats] = useState<string[]>(["meta"]);
+  const [acctByPlat, setAcctByPlat] = useState<Record<string, string>>({ meta: "m1", li: "l1" });
+  const [camp, setCamp] = useState("summer-sale");
+  const [campByPlat, setCampByPlat] = useState<Record<string, string>>({ meta: "summer-sale", li: "leadgen" });
+  const [search, setSearch] = useState("");
+  const cross = plats.length >= 2;
+
+  // ── Live connected account (real Meta data) ──────────────────────
+  type LiveCamp = typeof campaigns[number];
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [live, setLive] = useState<{ configured: boolean; account?: { id: string; name: string; currency: string }; campaigns: LiveCamp[]; liveError?: string | null; lastSynced?: string | null; accessibleAccounts?: { id: string; name: string; currency: string; timezone: string; status: number; business: string | null }[]; discoveryError?: string | null } | null>(null);
+  const chosenAccount = String(acctByPlat["meta"] ?? "");
+  useEffect(() => {
+    const acct = chosenAccount.startsWith("live:") ? chosenAccount.slice(5) : "";
+    const qs = new URLSearchParams({ t: String(Date.now()) });
+    if (acct) qs.set("account", acct);
+    fetch(`/api/db/accounts?${qs}`, { cache: "no-store" })
+      .then((r) => r.json()).then(setLive)
+      .catch(() => setLive({ configured: false, campaigns: [] }));
+  }, [chosenAccount]);
+
+  const liveAccts = (live?.accessibleAccounts ?? []).map((a) => ({
+    id: `live:${a.id}`,
+    name: a.name,
+    sub: `act_${a.id} · ${a.currency} · ${a.timezone}${a.business ? ` · ${a.business}` : ""}${a.status !== 1 ? " · inactive" : ""}`,
+  }));
+  async function syncNow(accountId: string) {
+    setSyncing(true);
+    setSyncMsg("Syncing campaigns → ad sets → ads…");
+    try {
+      const qs = new URLSearchParams({ preset: "last_30", t: String(Date.now()) });
+      if (accountId) qs.set("account", accountId);
+      const r = await fetch(`/api/sync/meta?${qs}`, { cache: "no-store" });
+      const d = await r.json();
+      if (!d.synced) {
+        setSyncMsg(`Sync failed: ${d.error ?? d.reason ?? "unknown"}${d.hint ? ` — ${d.hint}` : ""}`);
+        return;
+      }
+      setSyncMsg(
+        `Synced ${d.campaigns ?? 0} campaigns · ${d.adsets ?? 0} ad sets · ${d.ads ?? 0} ads` +
+        `${d.dayRows === 0 ? " — no new delivery in this window (campaigns may be paused)" : ` · ${d.dayRows} day-rows`}`
+      );
+      const q2 = new URLSearchParams({ t: String(Date.now()) });
+      if (accountId) q2.set("account", accountId);
+      const fresh = await fetch(`/api/db/accounts?${q2}`, { cache: "no-store" }).then((x) => x.json());
+      setLive(fresh);
+    } catch (e: any) {
+      setSyncMsg(`Sync failed: ${e?.message ?? "network error"}`);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  const syncAgeHours = live?.lastSynced
+    ? (Date.now() - new Date(live.lastSynced).getTime()) / 3_600_000
+    : null;
+  const stale = syncAgeHours != null && syncAgeHours > 36;
+
+  const liveAcct = liveAccts.length === 0 && live?.configured && live.account
+    ? [{ id: "live", name: live.account.name, sub: `act_${live.account.id} · ${live.account.currency}` }]
+    : liveAccts;
+  const accountsFor = (pid: string) => (pid === "meta" ? [...liveAcct, ...(ACCOUNTS[pid] ?? [])] : ACCOUNTS[pid] ?? []);
+  const usingLive = String(acctByPlat["meta"] ?? "").startsWith("live");
+  const pool = usingLive ? (live?.campaigns ?? []) : campaigns;
+  const curSym = live?.account?.currency === "INR" ? "₹" : "$";
+  useEffect(() => {
+    if (usingLive && live?.campaigns?.length) setCamp(live.campaigns[0].id);
+    if (!usingLive) setCamp("summer-sale");
+  }, [usingLive, live]);
+
+  const singleList = pool.filter((c) => plats.includes(c.platform) && c.name.toLowerCase().includes(search.toLowerCase())).slice(0, 8);
+  const accountsChosen = plats.every((p) => acctByPlat[p]);
+
+  const go = () => {
+    if (cross) { router.push(`/compare?meta=${campByPlat.meta}&li=${campByPlat.li}`); return; }
+    const c = pool.find((x) => x.id === camp) ?? campaigns.find((x) => x.id === camp);
+    if (!c) return;
+    setCampaign(c.id, c.name);
+    router.push(`/analysis/${c.id}`);
+  };
+
+  const steps = ["Platform", "Account", "Campaign"];
+  return (
+    <div className="max-w-3xl mx-auto px-8 py-7">
+      <PageHeader kicker="Wizard" title="Account check"
+        sub="Pick a platform, an account and a campaign — get the full AI analysis." />
+
+      {/* Step rail */}
+      <div className="flex items-center gap-0 mb-7">
+        {steps.map((s, i) => (
+          <div key={s} className="flex items-center flex-1 last:flex-none">
+            <div className={clsx("flex items-center gap-2 text-[13px] font-bold", i < step ? "text-good" : i === step ? "text-ink" : "text-mut")}>
+              <span className={clsx("w-8 h-8 rounded-xl grid place-items-center text-[12px] font-bold border-2 transition-all",
+                i < step ? "bg-good/15 border-good/40 text-good" : i === step ? "border-transparent text-white shadow-hero" : "border-line2")}
+                style={i === step ? { background: "var(--hero-grad)" } : undefined}>
+                {i < step ? <CheckIcon size={14} /> : i + 1}
+              </span>{s}
+            </div>
+            {i < steps.length - 1 && <div className={clsx("flex-1 h-0.5 mx-3 rounded", i < step ? "bg-good/50" : "bg-line2")} />}
+          </div>
+        ))}
+      </div>
+
+      <AnimatePresence mode="wait">
+        {step === 0 && (
+          <motion.div key="p" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }}>
+            <div className="section-label mb-2">Select one or more platforms</div>
+            <div className="text-[13px] text-mut rounded-xl px-4 py-3 mb-4 border border-accent/25" style={{ background: "var(--accent-soft)" }}>
+              💡 One platform → single-campaign deep dive. Two+ → cross-platform comparison, one account &amp; campaign per platform.
+            </div>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              {PLATFORMS.map((p) => {
+                const on = plats.includes(p.id);
+                return (
+                  <button key={p.id} disabled={!p.enabled}
+                    onClick={() => setPlats(on ? plats.filter((x) => x !== p.id) : [...plats, p.id])}
+                    className={clsx("card p-4 flex items-center gap-3 text-[14px] font-bold transition-all",
+                      !p.enabled && "opacity-40 cursor-not-allowed",
+                      on && "border-accent/50 ring-1 ring-accent/30")}
+                    style={on ? { background: "var(--accent-soft)" } : undefined}>
+                    <span className="w-9 h-9 rounded-xl grid place-items-center text-white text-[12px] font-bold" style={{ background: p.color }}>
+                      {p.name[0]}
+                    </span>
+                    {p.name}
+                    {p.enabled ? (
+                      <span className={clsx("ml-auto w-[22px] h-[22px] rounded-lg border-2 grid place-items-center text-white transition-colors", on ? "bg-accent border-accent" : "border-line2 bg-surface")}>
+                        {on && <CheckIcon size={13} />}
+                      </span>
+                    ) : <span className="ml-auto pill-mut">soon</span>}
+                  </button>
+                );
+              })}
+            </div>
+            <motion.p key={plats.length} initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+              className={clsx("text-[12.5px] font-bold mb-5", plats.length === 0 ? "text-bad" : "text-accent")}>
+              {plats.length === 0 ? "⚠ Select at least one platform" : cross ? `✓ ${plats.length} platforms → cross-platform comparison` : "✓ 1 platform → single campaign analysis"}
+            </motion.p>
+            <div className="flex justify-end">
+              <button disabled={plats.length === 0} onClick={() => setStep(1)} className="btn-primary">Next: Select account →</button>
+            </div>
+          </motion.div>
+        )}
+
+        {step === 1 && (
+          <motion.div key="a" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }}>
+            {cross && <div className="text-[13px] text-mut rounded-xl px-4 py-3 mb-4 border border-accent/25" style={{ background: "var(--accent-soft)" }}>⇄ Cross-platform mode — select <strong className="text-ink">one ad account per platform</strong>.</div>}
+            {plats.map((pid) => (
+              <div key={pid} className="mb-5">
+                <div className="section-label mb-2 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full" style={{ background: PLATFORMS.find((p) => p.id === pid)!.color }} />
+                  {PLATFORMS.find((p) => p.id === pid)!.name} ad accounts — pick one
+                  {acctByPlat[pid] && <span className="ml-1 text-good normal-case tracking-normal">✓ {accountsFor(pid).find(a => a.id === acctByPlat[pid])?.name}</span>}
+                </div>
+                <div className="card overflow-hidden divide-y divide-line">
+                  {accountsFor(pid).map((a) => (
+                    <button key={a.id} onClick={() => setAcctByPlat({ ...acctByPlat, [pid]: a.id })}
+                      className={clsx("w-full flex items-center gap-3 px-4 py-3.5 transition-colors text-left", acctByPlat[pid] === a.id ? "" : "hover:bg-raised")}
+                      style={acctByPlat[pid] === a.id ? { background: "var(--accent-soft)" } : undefined}>
+                      <span className={clsx("w-[18px] h-[18px] rounded-full border-2 grid place-items-center shrink-0", acctByPlat[pid] === a.id ? "border-accent bg-accent" : "border-line2 bg-surface")}>
+                        {acctByPlat[pid] === a.id && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                      </span>
+                      <div><div className="text-[13.5px] font-bold flex items-center gap-1.5">{a.name}
+                        {String(a.id).startsWith("live") && <span className="pill-good">Live</span>}
+                      </div><div className="text-[11px] text-mut font-medium">
+                        {a.sub}
+                        {String(a.id).startsWith("live") && live?.lastSynced && (
+                          <span className={stale ? "text-warn font-bold" : "text-mut"}>
+                            {" · "}synced {new Date(live.lastSynced).toLocaleString()}
+                            {stale && ` (${Math.floor((syncAgeHours ?? 0) / 24)}d ago — nightly sync may not be running)`}
+                          </span>
+                        )}
+                      </div></div>
+                      <span className="ml-auto flex items-center gap-2">
+                        {String(a.id).startsWith("live") && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); syncNow(String(a.id).startsWith("live:") ? String(a.id).slice(5) : ""); }}
+                            disabled={syncing}
+                            className="text-[11px] font-bold px-2.5 py-1.5 rounded-lg border border-line2 hover:bg-raised disabled:opacity-40">
+                            {syncing ? "Syncing…" : "Sync now"}
+                          </button>
+                        )}
+                        <StatusBadge s="Active" />
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {syncMsg && <div className="mb-3 text-[12px] font-bold text-accent">{syncMsg}</div>}
+            <div className="flex justify-between">
+              <button onClick={() => setStep(0)} className="btn-ghost">← Back</button>
+              <button disabled={!accountsChosen} onClick={() => setStep(2)} className="btn-primary">Next: Select campaign →</button>
+            </div>
+          </motion.div>
+        )}
+
+        {step === 2 && !cross && (
+          <motion.div key="c" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }}>
+            <div className="text-[13px] text-mut rounded-xl px-4 py-3 mb-3 border border-accent/25" style={{ background: "var(--accent-soft)" }}>🎯 Single platform — select <strong className="text-ink">one campaign</strong> to analyse in depth.</div>
+            <div className="relative mb-3">
+              <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-mut" />
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search campaigns…"
+                className="w-full text-[13px] font-medium pl-9 pr-3 py-2.5 rounded-xl border border-line2 bg-surface outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
+            </div>
+            {singleList.length === 0 && (
+              <div className="card p-4 mb-4 text-[13px] text-mut">
+                {usingLive
+                  ? <>No live campaigns are synced for <strong className="text-ink">{live?.account?.name ?? "this account"}</strong> yet. Run <code className="text-accent">/api/sync/meta?days=30</code>, then reload this page. {live?.liveError && <span className="text-bad">Reported error: {live.liveError}</span>}</>
+                  : <>No campaigns match “{search}”.</>}
+              </div>
+            )}
+            <div className="card overflow-hidden divide-y divide-line mb-5 max-h-[360px] overflow-y-auto">
+              {singleList.map((c) => (
+                <button key={c.id} onClick={() => setCamp(c.id)}
+                  className={clsx("w-full flex items-center gap-3 px-4 py-3.5 text-left transition-colors", camp === c.id ? "" : "hover:bg-raised")}
+                  style={camp === c.id ? { background: "var(--accent-soft)" } : undefined}>
+                  <span className={clsx("w-[18px] h-[18px] rounded-full border-2 grid place-items-center shrink-0", camp === c.id ? "border-accent bg-accent" : "border-line2 bg-surface")}>
+                    {camp === c.id && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                  </span>
+                  <div className="min-w-0"><div className="text-[13.5px] font-bold truncate">{c.name}</div><div className="text-[11px] text-mut font-medium num">{curSym}{c.spend.toLocaleString()} · {c.roas > 0 ? `ROAS ${c.roas}x` : "revenue not reported"} · CTR {c.ctr}%</div></div>
+                  <span className="ml-auto flex gap-1.5 items-center shrink-0"><PlatBadge p={c.platform} /><StatusBadge s={c.status} /></span>
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-between">
+              <button onClick={() => setStep(1)} className="btn-ghost">← Back</button>
+              <button onClick={go} disabled={!pool.some((x) => x.id === camp)} className="btn-primary">Run analysis →</button>
+            </div>
+          </motion.div>
+        )}
+
+        {step === 2 && cross && (
+          <motion.div key="x" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }}>
+            <div className="text-[13px] text-mut rounded-xl px-4 py-3 mb-3 border border-accent/25" style={{ background: "var(--accent-soft)" }}>⇄ Select <strong className="text-ink">one campaign per platform</strong> from the accounts you chose.</div>
+            {plats.map((pid) => (
+              <div key={pid} className="mb-5">
+                <div className="section-label mb-2 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full" style={{ background: PLATFORMS.find((p) => p.id === pid)!.color }} />
+                  {PLATFORMS.find((p) => p.id === pid)!.name} · {accountsFor(pid).find(a => a.id === acctByPlat[pid])?.name} — pick one campaign
+                </div>
+                <div className="card overflow-hidden divide-y divide-line">
+                  {campaigns.filter((c) => c.platform === pid && c.status === "Active").slice(0, 3).map((c) => (
+                    <button key={c.id} onClick={() => setCampByPlat({ ...campByPlat, [pid]: c.id })}
+                      className={clsx("w-full flex items-center gap-3 px-4 py-3.5 text-left transition-colors", campByPlat[pid] === c.id ? "" : "hover:bg-raised")}
+                      style={campByPlat[pid] === c.id ? { background: "var(--accent-soft)" } : undefined}>
+                      <span className={clsx("w-[18px] h-[18px] rounded-full border-2 grid place-items-center shrink-0", campByPlat[pid] === c.id ? "border-accent bg-accent" : "border-line2 bg-surface")}>
+                        {campByPlat[pid] === c.id && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                      </span>
+                      <div className="text-[13.5px] font-bold">{c.name}</div>
+                      <span className="ml-auto text-[11px] text-mut font-medium num">${c.spend.toLocaleString()} · {c.roas}x</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <div className="flex justify-between">
+              <button onClick={() => setStep(1)} className="btn-ghost">← Back</button>
+              <button onClick={go} className="btn-primary">Compare platforms →</button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
