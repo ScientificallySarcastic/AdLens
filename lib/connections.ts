@@ -80,7 +80,49 @@ class MemoryConnectionStore implements ConnectionStore {
 class NeonConnectionStore implements ConnectionStore {
   private sql = getSql();
 
+  /** Create the tables on first use so connecting an account never fails with
+   *  'relation does not exist'. Idempotent (IF NOT EXISTS) and run once per
+   *  process — db/meta-oauth.sql stays as the explicit reference. */
+  private ready: Promise<void> | null = null;
+  private ensureSchema(): Promise<void> {
+    if (!this.ready) {
+      this.ready = (async () => {
+        await this.sql`
+          CREATE TABLE IF NOT EXISTS meta_connections (
+            id             TEXT PRIMARY KEY,
+            owner          TEXT NOT NULL DEFAULT 'default',
+            fb_user_id     TEXT NOT NULL,
+            fb_user_name   TEXT NOT NULL DEFAULT '',
+            access_token   TEXT NOT NULL,
+            token_expires  TIMESTAMPTZ,
+            scopes         TEXT NOT NULL DEFAULT '',
+            created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+            revoked_at     TIMESTAMPTZ
+          )`;
+        await this.sql`
+          CREATE TABLE IF NOT EXISTS meta_connected_accounts (
+            account_id     TEXT NOT NULL,
+            connection_id  TEXT NOT NULL REFERENCES meta_connections(id) ON DELETE CASCADE,
+            name           TEXT NOT NULL DEFAULT '',
+            currency       TEXT NOT NULL DEFAULT '',
+            timezone       TEXT NOT NULL DEFAULT '',
+            business       TEXT NOT NULL DEFAULT '',
+            status         INT  NOT NULL DEFAULT 1,
+            created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (account_id, connection_id)
+          )`;
+        await this.sql`CREATE INDEX IF NOT EXISTS idx_meta_connections_owner ON meta_connections(owner)`;
+        await this.sql`CREATE INDEX IF NOT EXISTS idx_meta_connected_accounts_conn ON meta_connected_accounts(connection_id)`;
+      })().catch((e) => {
+        this.ready = null; // let the next request retry rather than caching failure
+        throw e;
+      });
+    }
+    return this.ready;
+  }
+
   async save(c: { fbUserId: string; fbUserName: string; token: string; expiresIn: number | null; scopes: string }, accounts: GrantedAccount[]) {
+    await this.ensureSchema();
     const id = `conn_${c.fbUserId}`;
     const expires = c.expiresIn ? new Date(Date.now() + c.expiresIn * 1000).toISOString() : null;
     await this.sql`
@@ -104,6 +146,7 @@ class NeonConnectionStore implements ConnectionStore {
   }
 
   async listAccounts(owner = DEFAULT_OWNER): Promise<ConnectedAccount[]> {
+    await this.ensureSchema();
     const rows = (await this.sql`
       SELECT a.* FROM meta_connected_accounts a
       JOIN meta_connections c ON c.id = a.connection_id
@@ -117,6 +160,7 @@ class NeonConnectionStore implements ConnectionStore {
   }
 
   async listConnections(owner = DEFAULT_OWNER): Promise<Connection[]> {
+    await this.ensureSchema();
     const rows = (await this.sql`
       SELECT * FROM meta_connections WHERE owner = ${owner} AND revoked_at IS NULL
       ORDER BY created_at DESC`) as Record<string, unknown>[];
@@ -128,6 +172,7 @@ class NeonConnectionStore implements ConnectionStore {
   }
 
   async tokenForAccount(accountId: string, owner = DEFAULT_OWNER): Promise<string | null> {
+    await this.ensureSchema();
     const clean = String(accountId).replace(/^act_/, "");
     const rows = (await this.sql`
       SELECT c.access_token FROM meta_connected_accounts a
@@ -138,6 +183,7 @@ class NeonConnectionStore implements ConnectionStore {
   }
 
   async disconnect(connectionId: string, owner = DEFAULT_OWNER): Promise<boolean> {
+    await this.ensureSchema();
     const rows = (await this.sql`
       UPDATE meta_connections SET revoked_at = now()
       WHERE id = ${connectionId} AND owner = ${owner} AND revoked_at IS NULL

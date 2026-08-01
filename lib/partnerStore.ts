@@ -99,6 +99,58 @@ class MemoryPartnerStore implements PartnerStore {
 class NeonPartnerStore implements PartnerStore {
   private sql = getSql();
 
+  /** Create the partner tables on first use so provisioning never fails with
+   *  'relation does not exist'. Idempotent; db/partner-auth.sql remains the
+   *  explicit reference for DBAs who prefer to run migrations by hand. */
+  private ready: Promise<void> | null = null;
+  private ensureSchema(): Promise<void> {
+    if (!this.ready) {
+      this.ready = (async () => {
+        await this.sql`
+          CREATE TABLE IF NOT EXISTS partners (
+            id             TEXT PRIMARY KEY,
+            name           TEXT NOT NULL,
+            status         TEXT NOT NULL DEFAULT 'active',
+            campaign_scope JSONB,
+            created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+          )`;
+        await this.sql`
+          CREATE TABLE IF NOT EXISTS partner_api_keys (
+            key_id       TEXT PRIMARY KEY,
+            partner_id   TEXT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+            secret_hash  TEXT NOT NULL,
+            env          TEXT NOT NULL DEFAULT 'live',
+            label        TEXT NOT NULL DEFAULT '',
+            scopes       JSONB NOT NULL DEFAULT '["results:read","keys:manage"]',
+            created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+            expires_at   TIMESTAMPTZ,
+            last_used_at TIMESTAMPTZ,
+            revoked_at   TIMESTAMPTZ
+          )`;
+        await this.sql`
+          CREATE TABLE IF NOT EXISTS partner_oauth_clients (
+            client_id   TEXT PRIMARY KEY,
+            partner_id  TEXT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+            secret_hash TEXT NOT NULL,
+            scopes      JSONB NOT NULL DEFAULT '["results:read","keys:manage"]',
+            created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+            revoked_at  TIMESTAMPTZ
+          )`;
+        await this.sql`
+          CREATE TABLE IF NOT EXISTS partner_audit (
+            id         BIGSERIAL PRIMARY KEY,
+            partner_id TEXT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+            at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+            event      TEXT NOT NULL,
+            detail     TEXT NOT NULL DEFAULT ''
+          )`;
+        await this.sql`CREATE INDEX IF NOT EXISTS idx_partner_api_keys_partner ON partner_api_keys(partner_id)`;
+        await this.sql`CREATE INDEX IF NOT EXISTS idx_partner_audit_partner ON partner_audit(partner_id, at DESC)`;
+      })().catch((e) => { this.ready = null; throw e; });
+    }
+    return this.ready;
+  }
+
   private rowToPartner(r: Record<string, unknown>): Partner {
     return {
       id: String(r.id), name: String(r.name), status: r.status as Partner["status"],
@@ -118,6 +170,7 @@ class NeonPartnerStore implements PartnerStore {
   }
 
   async createPartner(name: string, campaignScope: string[] | null): Promise<Partner> {
+    await this.ensureSchema();
     const id = `ptr_${Math.random().toString(16).slice(2, 14)}`;
     const rows = (await this.sql`
       INSERT INTO partners (id, name, status, campaign_scope)
@@ -126,29 +179,35 @@ class NeonPartnerStore implements PartnerStore {
     return this.rowToPartner(rows[0]);
   }
   async getPartner(id: string) {
+    await this.ensureSchema();
     const rows = (await this.sql`SELECT * FROM partners WHERE id = ${id}`) as Record<string, unknown>[];
     return rows[0] ? this.rowToPartner(rows[0]) : null;
   }
   async listPartners() {
+    await this.ensureSchema();
     const rows = (await this.sql`SELECT * FROM partners ORDER BY created_at DESC`) as Record<string, unknown>[];
     return rows.map((r) => this.rowToPartner(r));
   }
   async insertKey(k: PartnerApiKey) {
+    await this.ensureSchema();
     await this.sql`
       INSERT INTO partner_api_keys (key_id, partner_id, secret_hash, env, label, scopes, expires_at)
       VALUES (${k.keyId}, ${k.partnerId}, ${k.secretHash}, ${k.env}, ${k.label},
               ${JSON.stringify(k.scopes)}::jsonb, ${k.expiresAt})`;
   }
   async findKey(keyId: string) {
+    await this.ensureSchema();
     const rows = (await this.sql`SELECT * FROM partner_api_keys WHERE key_id = ${keyId}`) as Record<string, unknown>[];
     return rows[0] ? this.rowToKey(rows[0]) : null;
   }
   async listKeys(partnerId: string) {
+    await this.ensureSchema();
     const rows = (await this.sql`
       SELECT * FROM partner_api_keys WHERE partner_id = ${partnerId} ORDER BY created_at DESC`) as Record<string, unknown>[];
     return rows.map((r) => this.rowToKey(r));
   }
   async revokeKey(partnerId: string, keyId: string) {
+    await this.ensureSchema();
     const rows = (await this.sql`
       UPDATE partner_api_keys SET revoked_at = now()
       WHERE key_id = ${keyId} AND partner_id = ${partnerId} AND revoked_at IS NULL
@@ -156,14 +215,17 @@ class NeonPartnerStore implements PartnerStore {
     return rows.length > 0;
   }
   async touchKey(keyId: string) {
+    await this.ensureSchema();
     await this.sql`UPDATE partner_api_keys SET last_used_at = now() WHERE key_id = ${keyId}`;
   }
   async insertClient(c: PartnerOAuthClient) {
+    await this.ensureSchema();
     await this.sql`
       INSERT INTO partner_oauth_clients (client_id, partner_id, secret_hash, scopes)
       VALUES (${c.clientId}, ${c.partnerId}, ${c.secretHash}, ${JSON.stringify(c.scopes)}::jsonb)`;
   }
   async findClient(clientId: string) {
+    await this.ensureSchema();
     const rows = (await this.sql`
       SELECT * FROM partner_oauth_clients WHERE client_id = ${clientId}`) as Record<string, unknown>[];
     const r = rows[0];
@@ -175,10 +237,12 @@ class NeonPartnerStore implements PartnerStore {
     };
   }
   async audit(partnerId: string, event: string, detail: string) {
+    await this.ensureSchema();
     await this.sql`
       INSERT INTO partner_audit (partner_id, event, detail) VALUES (${partnerId}, ${event}, ${detail})`;
   }
   async listAudit(partnerId: string) {
+    await this.ensureSchema();
     const rows = (await this.sql`
       SELECT at, event, detail FROM partner_audit WHERE partner_id = ${partnerId}
       ORDER BY at DESC LIMIT 100`) as Record<string, unknown>[];

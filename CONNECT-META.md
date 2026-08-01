@@ -24,8 +24,7 @@ take precedence when present.
    `https://YOUR-DOMAIN/api/auth/meta/callback` (and your localhost URL for dev).
 3. Add Product → **Marketing API**.
 4. Copy the **App ID** and **App Secret** (Settings → Basic).
-5. Run `db/meta-oauth.sql` once in the Neon SQL Editor.
-6. Set environment variables:
+5. Set environment variables:
 
 ```
 META_APP_ID=<app id>
@@ -33,6 +32,11 @@ META_APP_SECRET=<app secret>
 TOKEN_ENCRYPTION_KEY=<openssl rand -hex 32>   # encrypts stored tokens
 META_OAUTH_REDIRECT_URI=                       # optional; defaults to <origin>/api/auth/meta/callback
 ```
+
+**No migration step.** The tables are created automatically on first use
+(`CREATE TABLE IF NOT EXISTS`, run once per process). `db/meta-oauth.sql` is kept
+as the explicit reference if you prefer to run migrations by hand — but you never
+have to, and a fresh database will not fail with "relation does not exist".
 
 To let people outside your own Business use it, submit **`ads_read`** for App
 Review and take the app Live. Until then it works for anyone with a role on your
