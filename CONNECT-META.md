@@ -56,7 +56,10 @@ Meta app (fine for pilots and internal use).
 /api/connections        → list connected accounts · DELETE to disconnect
 ```
 
-Requested scopes are `ads_read` and `read_insights` — read-only. AdLens cannot
+The requested scope is `ads_read` only — read-only, and it already covers the
+`/insights` edges the dashboard reads. (`read_insights` is a Page-insights
+permission, not a valid Login scope; asking for it makes Meta refuse the dialog
+with "Invalid Scopes".) AdLens cannot
 create, edit, pause, or spend anything.
 
 ## Security
@@ -76,6 +79,39 @@ create, edit, pause, or spend anything.
 Long-lived tokens last ~60 days. `token_expires` is stored per connection, so a
 reminder or refresh job can be added later; today an expired connection surfaces
 Meta's auth error and the user simply clicks Connect again.
+
+## Going Live (App Review)
+
+Development mode lets anyone with a role on the Meta app connect — enough for
+testing and pilots. Serving real customers needs `ads_read` at **Advanced
+Access**, which is a separate gate from the Live toggle.
+
+Order matters:
+
+1. **Business Verification** — Meta verifies your business with documents.
+   Required before `ads_read` can reach Advanced Access. Start it first; it is
+   the slowest step.
+2. **App Review** → Permissions and Features → request **Advanced Access** for
+   `ads_read`. Include a screencast of a real user clicking Connect, approving
+   on Meta's screen, and data appearing — so deploy OAuth before submitting.
+3. **Flip App Mode to Live** (top of the app dashboard).
+
+### Dashboard URLs Meta requires
+
+| Field | Value |
+| --- | --- |
+| Valid OAuth Redirect URI | `https://YOUR-DOMAIN/api/auth/meta/callback` |
+| Deauthorize Callback URL | `https://YOUR-DOMAIN/api/auth/meta/deauthorize` |
+| Data Deletion Callback URL | `https://YOUR-DOMAIN/api/auth/meta/data-deletion` |
+| Privacy Policy URL | you must supply one |
+
+The deauthorize and data-deletion callbacks are **implemented in this repo**.
+Both verify Meta's `signed_request` HMAC before acting, and both delete the
+stored connection — token included — so access stops the moment a user removes
+AdLens from their Facebook settings. `GET /api/auth/meta/data-deletion?id=<user>`
+returns the deletion status Meta requires.
+
+Still on you: a Privacy Policy URL, an app icon (1024×1024), and a category.
 
 ## Limitation
 

@@ -9,8 +9,10 @@ import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 const VERSION = () => process.env.META_API_VERSION || "v23.0";
 const GRAPH = () => `https://graph.facebook.com/${VERSION()}`;
 
-// ads_read + read_insights: everything the dashboard needs, nothing it doesn't.
-export const OAUTH_SCOPES = "ads_read,read_insights";
+// ads_read is the whole ask: it covers campaigns, ad sets, ads AND their
+// /insights edges. (read_insights is a Page-insights permission and is NOT a
+// valid Login scope — requesting it makes Meta reject the dialog outright.)
+export const OAUTH_SCOPES = "ads_read";
 
 export function oauthConfigured(): boolean {
   return Boolean(process.env.META_APP_ID && process.env.META_APP_SECRET);

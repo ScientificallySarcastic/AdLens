@@ -268,7 +268,7 @@ export default function Check() {
                         </div>
                       </div>
                       {conn?.oauthConfigured === false ? (
-                        <span className="pill-mut">Connect unavailable — not configured</span>
+                        <span className="pill-warn shrink-0">Setup needed</span>
                       ) : (
                         <a href="/api/auth/meta" className="btn-primary shrink-0">
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
@@ -278,6 +278,19 @@ export default function Check() {
                         </a>
                       )}
                     </div>
+
+                    {/* Admin-facing: say exactly what is missing, not just "not configured". */}
+                    {conn?.oauthConfigured === false && (
+                      <div className="mt-3 pt-3 border-t border-line text-[11.5px] text-mut font-medium leading-relaxed">
+                        One-time setup by whoever runs this deployment — your users never do this.
+                        Create a Meta app with <strong className="text-ink">Facebook Login</strong> (redirect{" "}
+                        <span className="num">{typeof window !== "undefined" ? window.location.origin : ""}/api/auth/meta/callback</span>)
+                        and <strong className="text-ink">Marketing API</strong>, then set{" "}
+                        <span className="num">META_APP_ID</span>, <span className="num">META_APP_SECRET</span> and{" "}
+                        <span className="num">TOKEN_ENCRYPTION_KEY</span>. Full steps in{" "}
+                        <strong className="text-ink">CONNECT-META.md</strong>.
+                      </div>
+                    )}
 
                     {connectMsg && (
                       <div className="mt-3 text-[12px] font-bold" style={{
