@@ -1,280 +1,233 @@
 "use client";
-import { useState, useEffect } from "react";
-import { Copy, Check, Eye, EyeOff } from "lucide-react";
+import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Copy, Check, Eye, EyeOff, KeyRound, Plus, ShieldCheck, Lock } from "lucide-react";
+import PageHeader from "@/components/PageHeader";
 
 interface PartnerRow {
   id: string;
   name: string;
   status: "active" | "suspended";
+  campaignScope: string[] | null;
   createdAt: string;
   keys: { key: string; label: string; lastUsedAt: string | null; revokedAt: string | null }[];
 }
+
+interface Creds { apiKey: string; clientId: string; clientSecret: string; name: string }
 
 export default function PartnersAdmin() {
   const [adminToken, setAdminToken] = useState("");
   const [authed, setAuthed] = useState(false);
   const [name, setName] = useState("");
-  const [campaignScope, setCampaignScope] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
+  const [scope, setScope] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const [partners, setPartners] = useState<PartnerRow[]>([]);
-  const [showCreds, setShowCreds] = useState(false);
-  const [lastCreds, setLastCreds] = useState<{ apiKey: string; clientId: string; clientSecret: string; name: string } | null>(null);
+  const [reveal, setReveal] = useState(false);
+  const [creds, setCreds] = useState<Creds | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    const res = await fetch("/api/partners", {
-      headers: { "X-Admin-Token": adminToken },
-    }).catch(() => null);
-    if (res?.ok) {
-      setAuthed(true);
-      setMessage("Authenticated ✓");
-      loadPartners();
-    } else {
-      setMessage("Invalid admin token");
-    }
-    setLoading(false);
-  };
+  async function load(token = adminToken) {
+    const res = await fetch("/api/partners", { headers: { "X-Admin-Token": token } });
+    if (res.ok) setPartners((await res.json()).partners);
+  }
 
-  const loadPartners = async () => {
-    const res = await fetch("/api/partners", { headers: { "X-Admin-Token": adminToken } });
-    if (res.ok) {
-      const data = await res.json();
-      setPartners(data.partners);
-    }
-  };
-
-  const handleCreate = async (e: React.FormEvent) => {
+  async function login(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim()) {
-      setMessage("Partner name required");
-      return;
-    }
-    setLoading(true);
-    const scope = campaignScope
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    setBusy(true); setError("");
+    const res = await fetch("/api/partners", { headers: { "X-Admin-Token": adminToken } }).catch(() => null);
+    if (res?.ok) { setAuthed(true); await load(); }
+    else setError("That admin token was rejected.");
+    setBusy(false);
+  }
+
+  async function create(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setBusy(true); setError("");
+    const list = scope.split(",").map((s) => s.trim()).filter(Boolean);
     const res = await fetch("/api/partners", {
       method: "POST",
       headers: { "X-Admin-Token": adminToken, "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name.trim(), campaignScope: scope.length > 0 ? scope : undefined }),
+      body: JSON.stringify({ name: name.trim(), ...(list.length ? { campaignScope: list } : {}) }),
     });
     if (res.ok) {
-      const data = await res.json();
-      setLastCreds({
-        apiKey: data.credentials.apiKey,
-        clientId: data.credentials.oauth.clientId,
-        clientSecret: data.credentials.oauth.clientSecret,
-        name: data.partner.name,
-      });
-      setMessage(`✓ Partner "${name}" created with auto-provisioned credentials`);
-      setName("");
-      setCampaignScope("");
-      loadPartners();
+      const d = await res.json();
+      setCreds({ apiKey: d.credentials.apiKey, clientId: d.credentials.oauth.clientId, clientSecret: d.credentials.oauth.clientSecret, name: d.partner.name });
+      setReveal(false); setName(""); setScope(""); await load();
     } else {
-      const err = await res.json();
-      setMessage(`Error: ${err.error?.message}`);
+      setError((await res.json()).error?.message ?? "Could not create partner.");
     }
-    setLoading(false);
-  };
+    setBusy(false);
+  }
 
-  const copy = (text: string, key: string) => {
+  function copy(text: string, key: string) {
     navigator.clipboard.writeText(text);
     setCopied(key);
-    setTimeout(() => setCopied(null), 2000);
-  };
+    setTimeout(() => setCopied(null), 1600);
+  }
 
+  // ── Gate ────────────────────────────────────────────────────────
   if (!authed) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 p-6">
-        <div className="max-w-md mx-auto mt-12 bg-slate-800 border border-slate-700 rounded-lg p-8">
-          <h1 className="text-2xl font-bold text-white mb-2">Partner Admin</h1>
-          <p className="text-slate-400 text-sm mb-6">Enter your admin token to provision partners</p>
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <input
-                type="password"
-                placeholder="Admin token"
-                value={adminToken}
-                onChange={(e) => setAdminToken(e.target.value)}
-                className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium rounded transition"
-            >
-              {loading ? "Checking..." : "Login"}
+      <div className="px-7 py-8 max-w-md mx-auto">
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="card p-7 mt-16">
+          <div className="w-11 h-11 rounded-xl grid place-items-center mb-4" style={{ background: "var(--accent-soft)" }}>
+            <Lock size={19} style={{ color: "var(--accent)" }} />
+          </div>
+          <h1 className="font-display text-[24px] leading-tight">Partner admin</h1>
+          <p className="text-[13px] text-mut mt-1.5 mb-6 font-medium">
+            Enter the admin token to provision partner API access.
+          </p>
+          <form onSubmit={login} className="space-y-3">
+            <input
+              type="password" placeholder="Admin token" value={adminToken}
+              onChange={(e) => setAdminToken(e.target.value)}
+              className="w-full px-3.5 py-2.5 bg-raised border border-line2 rounded-xl text-[13px] outline-none focus:border-accent transition-colors"
+            />
+            <button type="submit" disabled={busy || !adminToken} className="btn-primary w-full justify-center">
+              {busy ? "Checking…" : "Unlock"}
             </button>
           </form>
-          {message && <p className="mt-4 text-sm text-slate-300">{message}</p>}
-        </div>
+          {error && <p className="mt-3 text-[12px] font-semibold" style={{ color: "var(--bad)" }}>{error}</p>}
+        </motion.div>
       </div>
     );
   }
 
+  // ── Console ─────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 p-6">
-      <div className="max-w-6xl mx-auto">
-        <div className="flex justify-between items-center mb-8">
-          <h1 className="text-3xl font-bold text-white">Partner Provisioning</h1>
-          <button
-            onClick={() => {
-              setAuthed(false);
-              setAdminToken("");
-            }}
-            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded transition"
-          >
-            Logout
+    <div className="px-7 py-7 max-w-[1100px]">
+      <PageHeader
+        kicker="Admin"
+        title="Partner access"
+        sub="Create a partner and their API credentials are provisioned automatically — no app setup, no manual tokens."
+        right={<button onClick={() => { setAuthed(false); setAdminToken(""); setPartners([]); setCreds(null); }} className="btn-ghost">Lock</button>}
+      />
+
+      {/* Create */}
+      <div className="card p-6 mb-5">
+        <div className="flex items-center gap-2 mb-4">
+          <Plus size={15} style={{ color: "var(--accent)" }} />
+          <h2 className="text-[15px] font-bold tracking-tight">Add a partner</h2>
+        </div>
+        <form onSubmit={create} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-3 items-end">
+          <div>
+            <label className="section-label block mb-1.5">Partner name</label>
+            <input
+              value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Agency"
+              className="w-full px-3.5 py-2.5 bg-raised border border-line2 rounded-xl text-[13px] outline-none focus:border-accent transition-colors"
+            />
+          </div>
+          <div>
+            <label className="section-label block mb-1.5">Campaign access</label>
+            <input
+              value={scope} onChange={(e) => setScope(e.target.value)} placeholder="All campaigns (leave empty)"
+              className="w-full px-3.5 py-2.5 bg-raised border border-line2 rounded-xl text-[13px] outline-none focus:border-accent transition-colors"
+            />
+          </div>
+          <button type="submit" disabled={busy || !name.trim()} className="btn-primary h-[42px]">
+            {busy ? "Creating…" : "Create partner"}
           </button>
-        </div>
+        </form>
+        <p className="text-[12px] text-mut mt-2.5 font-medium">
+          Leave campaign access empty for every campaign, or list ids separated by commas — e.g. <span className="num">summer-sale, retargeting</span>.
+        </p>
+        {error && <p className="mt-3 text-[12px] font-semibold" style={{ color: "var(--bad)" }}>{error}</p>}
+      </div>
 
-        {/* Create partner */}
-        <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 mb-8">
-          <h2 className="text-xl font-semibold text-white mb-4">Add New Partner</h2>
-          <form onSubmit={handleCreate} className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">Partner Name *</label>
-                <input
-                  type="text"
-                  placeholder="e.g., Acme Agency"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                />
+      {/* Credentials — shown once */}
+      <AnimatePresence>
+        {creds && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
+            className="card p-6 mb-5" style={{ borderColor: "rgba(var(--warn-rgb),0.35)", background: "var(--warn-soft)" }}
+          >
+            <div className="flex items-start justify-between gap-4 mb-1">
+              <div className="flex items-center gap-2">
+                <ShieldCheck size={16} style={{ color: "var(--warn)" }} />
+                <h3 className="text-[15px] font-bold tracking-tight">Credentials for {creds.name}</h3>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">Campaign Scope (optional)</label>
-                <input
-                  type="text"
-                  placeholder="e.g., summer-sale, retargeting"
-                  value={campaignScope}
-                  onChange={(e) => setCampaignScope(e.target.value)}
-                  className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-            </div>
-            <p className="text-xs text-slate-400">Leave scope empty for access to all campaigns. Comma-separated campaign IDs to restrict.</p>
-            <button
-              type="submit"
-              disabled={loading || !name.trim()}
-              className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium rounded transition"
-            >
-              {loading ? "Creating..." : "Create Partner"}
-            </button>
-          </form>
-          {message && <p className="mt-4 text-sm text-indigo-300">{message}</p>}
-        </div>
-
-        {/* Credentials display */}
-        {lastCreds && (
-          <div className="bg-amber-900/30 border border-amber-700 rounded-lg p-6 mb-8">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-amber-100">🔑 Credentials for {lastCreds.name}</h3>
-              <button
-                onClick={() => setShowCreds(!showCreds)}
-                className="p-2 hover:bg-amber-800/30 rounded text-amber-100 transition"
-              >
-                {showCreds ? <EyeOff size={18} /> : <Eye size={18} />}
+              <button onClick={() => setReveal(!reveal)} className="btn-ghost">
+                {reveal ? <EyeOff size={14} /> : <Eye size={14} />}{reveal ? "Hide" : "Reveal"}
               </button>
             </div>
-            <p className="text-xs text-amber-200 mb-4">⚠️ Store these now — they are shown only once and never retrievable again.</p>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-amber-100 mb-1">API Key (easiest)</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type={showCreds ? "text" : "password"}
-                    value={lastCreds.apiKey}
-                    readOnly
-                    className="flex-1 px-3 py-2 bg-slate-900 border border-amber-700 rounded text-amber-100 font-mono text-xs focus:outline-none"
-                  />
-                  <button
-                    onClick={() => copy(lastCreds.apiKey, "key")}
-                    className="p-2 hover:bg-amber-700/30 rounded text-amber-100 transition"
-                  >
-                    {copied === "key" ? <Check size={18} /> : <Copy size={18} />}
-                  </button>
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-amber-100 mb-1">OAuth Client ID</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={lastCreds.clientId}
-                    readOnly
-                    className="flex-1 px-3 py-2 bg-slate-900 border border-amber-700 rounded text-amber-100 font-mono text-xs focus:outline-none"
-                  />
-                  <button
-                    onClick={() => copy(lastCreds.clientId, "id")}
-                    className="p-2 hover:bg-amber-700/30 rounded text-amber-100 transition"
-                  >
-                    {copied === "id" ? <Check size={18} /> : <Copy size={18} />}
-                  </button>
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-amber-100 mb-1">OAuth Client Secret</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type={showCreds ? "text" : "password"}
-                    value={lastCreds.clientSecret}
-                    readOnly
-                    className="flex-1 px-3 py-2 bg-slate-900 border border-amber-700 rounded text-amber-100 font-mono text-xs focus:outline-none"
-                  />
-                  <button
-                    onClick={() => copy(lastCreds.clientSecret, "secret")}
-                    className="p-2 hover:bg-amber-700/30 rounded text-amber-100 transition"
-                  >
-                    {copied === "secret" ? <Check size={18} /> : <Copy size={18} />}
-                  </button>
-                </div>
-              </div>
+            <p className="text-[12px] font-semibold mb-4" style={{ color: "var(--warn)" }}>
+              Copy these now — secrets are shown once and can never be retrieved again.
+            </p>
+            <div className="space-y-2.5">
+              <Field label="API key — the whole integration" value={creds.apiKey} secret hidden={!reveal} onCopy={() => copy(creds.apiKey, "k")} copied={copied === "k"} />
+              <Field label="OAuth client id" value={creds.clientId} onCopy={() => copy(creds.clientId, "i")} copied={copied === "i"} />
+              <Field label="OAuth client secret" value={creds.clientSecret} secret hidden={!reveal} onCopy={() => copy(creds.clientSecret, "s")} copied={copied === "s"} />
             </div>
+            <div className="mt-4 pt-4 border-t border-line">
+              <div className="section-label mb-1.5">Send this to the partner</div>
+              <code className="block text-[11.5px] num bg-raised border border-line rounded-xl px-3 py-2.5 overflow-x-auto whitespace-pre">
+{`curl ${typeof window !== "undefined" ? window.location.origin : ""}/api/partner/results \\
+  -H "Authorization: Bearer ${reveal ? creds.apiKey : "ak_live_••••••••"}"`}
+              </code>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Partners */}
+      <div className="card p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <KeyRound size={15} style={{ color: "var(--accent)" }} />
+          <h2 className="text-[15px] font-bold tracking-tight">Partners</h2>
+          <span className="pill-mut ml-1">{partners.length}</span>
+        </div>
+        {partners.length === 0 ? (
+          <p className="text-[13px] text-mut font-medium py-6 text-center">No partners yet — create one above.</p>
+        ) : (
+          <div className="space-y-2.5">
+            {partners.map((p) => (
+              <div key={p.id} className="border border-line rounded-xl px-4 py-3.5 bg-raised/40">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div>
+                    <div className="text-[14px] font-bold tracking-tight">{p.name}</div>
+                    <div className="text-[11.5px] text-mut num mt-0.5">{p.id}</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="pill-accent">{p.campaignScope ? `${p.campaignScope.length} campaign${p.campaignScope.length > 1 ? "s" : ""}` : "All campaigns"}</span>
+                    <span className={p.status === "active" ? "pill-good" : "pill-mut"}>{p.status}</span>
+                  </div>
+                </div>
+                {p.keys.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-line space-y-1">
+                    {p.keys.map((k, i) => (
+                      <div key={i} className="flex items-center justify-between gap-3 text-[11.5px] flex-wrap">
+                        <span className={`num ${k.revokedAt ? "line-through text-mut opacity-60" : ""}`}>{k.key}</span>
+                        <span className="text-mut font-medium">
+                          {k.revokedAt ? "revoked" : k.lastUsedAt ? `last used ${new Date(k.lastUsedAt).toLocaleDateString()}` : "never used"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
 
-        {/* Partners list */}
-        <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-          <h2 className="text-xl font-semibold text-white mb-4">Active Partners ({partners.length})</h2>
-          {partners.length === 0 ? (
-            <p className="text-slate-400">No partners yet. Create one above.</p>
-          ) : (
-            <div className="space-y-4">
-              {partners.map((p) => (
-                <div key={p.id} className="bg-slate-700/50 border border-slate-600 rounded p-4">
-                  <div className="flex justify-between items-start mb-3">
-                    <div>
-                      <h3 className="font-semibold text-white">{p.name}</h3>
-                      <p className="text-xs text-slate-400">{p.id}</p>
-                    </div>
-                    <span className="px-3 py-1 bg-green-600/20 text-green-300 text-xs rounded-full">{p.status}</span>
-                  </div>
-                  <p className="text-xs text-slate-400 mb-2">Created: {new Date(p.createdAt).toLocaleDateString()}</p>
-                  {p.keys.length > 0 && (
-                    <div className="text-xs text-slate-300">
-                      <p className="font-medium mb-1">Keys:</p>
-                      <div className="space-y-1 ml-2">
-                        {p.keys.map((k, i) => (
-                          <div key={i} className="text-slate-400">
-                            <span className={k.revokedAt ? "line-through opacity-50" : ""}>{k.key}</span> ({k.label})
-                            {k.lastUsedAt && <span className="ml-2 text-slate-500">last used: {new Date(k.lastUsedAt).toLocaleDateString()}</span>}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+function Field({ label, value, secret, hidden, onCopy, copied }:
+  { label: string; value: string; secret?: boolean; hidden?: boolean; onCopy: () => void; copied: boolean }) {
+  return (
+    <div>
+      <label className="section-label block mb-1.5">{label}</label>
+      <div className="flex items-center gap-2">
+        <input
+          readOnly value={secret && hidden ? "•".repeat(Math.min(value.length, 48)) : value}
+          className="flex-1 px-3 py-2 bg-surface border border-line rounded-xl text-[11.5px] num outline-none"
+        />
+        <button onClick={onCopy} className="btn-ghost shrink-0" aria-label={`Copy ${label}`}>
+          {copied ? <Check size={14} style={{ color: "var(--good)" }} /> : <Copy size={14} />}
+        </button>
       </div>
     </div>
   );
