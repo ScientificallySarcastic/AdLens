@@ -43,13 +43,19 @@ export default function Check() {
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [live, setLive] = useState<{ configured: boolean; account?: { id: string; name: string; currency: string }; campaigns: LiveCamp[]; liveError?: string | null; lastSynced?: string | null; accessibleAccounts?: { id: string; name: string; currency: string; timezone: string; status: number; business: string | null; connectionId?: string | null }[]; discoveryError?: string | null } | null>(null);
   const chosenAccount = String(acctByPlat["meta"] ?? "");
+  // Discovering live accounts calls the Meta Graph API, which is routinely a
+  // few seconds — the picker must say so rather than looking like the demo
+  // accounts are all there is.
+  const [loadingAccounts, setLoadingAccounts] = useState(true);
   useEffect(() => {
     const acct = chosenAccount.startsWith("live:") ? chosenAccount.slice(5) : "";
     const qs = new URLSearchParams({ t: String(Date.now()) });
     if (acct) qs.set("account", acct);
+    setLoadingAccounts(true);
     fetch(`/api/db/accounts?${qs}`, { cache: "no-store" })
       .then((r) => r.json()).then(setLive)
-      .catch(() => setLive({ configured: false, campaigns: [] }));
+      .catch(() => setLive({ configured: false, campaigns: [] }))
+      .finally(() => setLoadingAccounts(false));
   }, [chosenAccount]);
 
   const liveAccts = (live?.accessibleAccounts ?? []).map((a) => ({
@@ -60,7 +66,7 @@ export default function Check() {
   }));
   async function syncNow(accountId: string) {
     setSyncing(true);
-    setSyncMsg("Syncing campaigns → ad sets → ads…");
+    setSyncMsg("Syncing campaigns → ad sets → ads from Meta… please wait, this can take up to a minute for large accounts.");
     try {
       const qs = new URLSearchParams({ preset: "last_30", t: String(Date.now()) });
       if (accountId) qs.set("account", accountId);
@@ -251,6 +257,25 @@ export default function Check() {
                   {PLATFORMS.find((p) => p.id === pid)!.name} ad accounts — pick one
                   {acctByPlat[pid] && <span className="ml-1 text-good normal-case tracking-normal">✓ {accountsFor(pid).find(a => a.id === acctByPlat[pid])?.name}</span>}
                 </div>
+
+                {/* Live discovery goes to the Meta Graph API — say so while it runs,
+                    otherwise the demo rows look like the complete list. */}
+                {pid === "meta" && loadingAccounts && (
+                  <div className="flex items-center gap-2.5 mb-2 px-3.5 py-2.5 rounded-xl border border-accent/25"
+                       style={{ background: "var(--accent-soft)" }}>
+                    <span className="flex gap-1 shrink-0">
+                      {[0, 1, 2].map((i) => (
+                        <motion.span key={i} className="w-1.5 h-1.5 rounded-full bg-accent"
+                          animate={{ opacity: [0.3, 1, 0.3] }}
+                          transition={{ repeat: Infinity, duration: 1, delay: i * 0.2 }} />
+                      ))}
+                    </span>
+                    <span className="text-[12.5px] font-semibold text-accent">
+                      Loading your live ad accounts — please wait, this can take a few seconds.
+                    </span>
+                  </div>
+                )}
+
                 <div className="card overflow-hidden divide-y divide-line">
                   {accountsFor(pid).map((a) => (
                     <button key={a.id} onClick={() => setAcctByPlat({ ...acctByPlat, [pid]: a.id })}
