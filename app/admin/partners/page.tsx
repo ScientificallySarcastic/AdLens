@@ -15,6 +15,10 @@ interface PartnerRow {
 
 interface Creds { apiKey: string; clientId: string; clientSecret: string; name: string }
 
+// Inlined at build time by Next — the dev hint never ships in a production bundle.
+const IS_DEV = process.env.NODE_ENV !== "production";
+const DEV_TOKEN = "dev-admin-token";
+
 export default function PartnersAdmin() {
   const [adminToken, setAdminToken] = useState("");
   const [authed, setAuthed] = useState(false);
@@ -90,6 +94,29 @@ export default function PartnersAdmin() {
             </button>
           </form>
           {error && <p className="mt-3 text-[12px] font-semibold" style={{ color: "var(--bad)" }}>{error}</p>}
+
+          {/* Where the token comes from — dev shows it, production explains it. */}
+          {IS_DEV ? (
+            <div className="mt-5 pt-4 border-t border-line">
+              <div className="section-label mb-1.5">Running locally</div>
+              <p className="text-[12px] text-mut font-medium mb-2">Use the development token:</p>
+              <button
+                type="button"
+                onClick={() => { setAdminToken(DEV_TOKEN); navigator.clipboard?.writeText(DEV_TOKEN); }}
+                className="w-full text-left num text-[12px] px-3 py-2 rounded-xl border border-line bg-raised hover:border-accent transition-colors"
+              >
+                {DEV_TOKEN} <span className="text-mut font-medium">— click to fill</span>
+              </button>
+            </div>
+          ) : (
+            <div className="mt-5 pt-4 border-t border-line">
+              <p className="text-[12px] text-mut font-medium">
+                Your token is the <span className="num">PARTNER_ADMIN_TOKEN</span> set in this deployment&rsquo;s
+                environment variables. Ask whoever set up the deployment — it is shared once with the team,
+                not created per partner.
+              </p>
+            </div>
+          )}
         </motion.div>
       </div>
     );

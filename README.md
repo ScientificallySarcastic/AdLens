@@ -35,6 +35,7 @@ With the key, the Ask AI panel streams real Claude analysis grounded in the sele
 | **Reporting** | 3-step selection → report view with charts, comparison table, AI narrative, PDF export |
 | **Ledger** | Every recommendation → followed/ignored → measured outcome. 64% action rate, +31% avg improvement |
 | **Alerts** | Rules-engine alerts (ROAS/CTR/CPC/pacing thresholds) |
+| **Connect with Facebook** | Users add their own Meta ad accounts with one click — OAuth, no app setup or pasted tokens, unlimited accounts per deployment — see [CONNECT-META.md](CONNECT-META.md) |
 | **Partner API** | Zero-setup partner access: auto-provisioned API keys + OAuth client credentials, tenant-scoped results — see [PARTNER-API.md](PARTNER-API.md) |
 
 ## Architecture

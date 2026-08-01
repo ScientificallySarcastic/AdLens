@@ -14,7 +14,19 @@ import { getPartnerStore, Partner, PartnerScope } from "./partnerStore";
 
 export const ACCESS_TOKEN_TTL = 900; // 15 min — revocation blast radius
 
-const jwtSecret = () => process.env.PARTNER_JWT_SECRET || "dev-partner-jwt-secret";
+// Dev conveniences must NEVER become production defaults: these fallback values
+// are published in PARTNER-API.md, so shipping them live would let anyone
+// provision partners or forge access tokens. Both resolvers fail closed instead.
+const IS_PROD = process.env.NODE_ENV === "production";
+
+export const DEV_ADMIN_TOKEN = "dev-admin-token";
+
+function jwtSecret(): string {
+  const s = process.env.PARTNER_JWT_SECRET;
+  if (s) return s;
+  if (IS_PROD) throw new Error("PARTNER_JWT_SECRET must be set in production");
+  return "dev-partner-jwt-secret";
+}
 
 // ── Secrets: hash-at-rest, constant-time verify ────────────────────
 export const hashSecret = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -128,5 +140,11 @@ export function checkRateLimit(partnerId: string): { allowed: boolean; remaining
 
 // Admin guard for the provisioning endpoint (your onboarding flow, not partners).
 export function isAdmin(req: Request): boolean {
-  return req.headers.get("x-admin-token") === (process.env.PARTNER_ADMIN_TOKEN || "dev-admin-token");
+  const configured = process.env.PARTNER_ADMIN_TOKEN;
+  // No token configured in production ⇒ admin surface is sealed, not open.
+  if (!configured && IS_PROD) return false;
+  const expected = configured || DEV_ADMIN_TOKEN;
+  const a = Buffer.from(req.headers.get("x-admin-token") ?? "");
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
 }

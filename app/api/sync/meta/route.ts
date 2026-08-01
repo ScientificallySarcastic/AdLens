@@ -32,7 +32,11 @@ export async function GET(req: Request) {
   // Explicit account selection — the platform is not tied to one configured
   // account, so any account the credential can reach may be requested.
   const accountParam = url.searchParams.get("account");
-  if (accountParam) (await import("@/lib/meta")).setActiveAccount(accountParam);
+  // Prefer an OAuth-connected credential for this account; setActiveAccount
+  // alone would pair the requested account with the wrong (env) token.
+  const { useConnectedAccount, setActiveAccount } = await import("@/lib/meta");
+  const viaOAuth = await useConnectedAccount(accountParam);
+  if (accountParam && !viaOAuth) setActiveAccount(accountParam);
   const presetParam = url.searchParams.get("preset") ?? "";
   const sinceParam = url.searchParams.get("since");
   const untilParam = url.searchParams.get("until");
@@ -101,7 +105,10 @@ export async function GET(req: Request) {
     const sql = getSql();
     // Every row written is stamped with the ad account it came from, so live
     // reads can be scoped and two accounts' data can never be mixed.
-    const acctId = process.env.META_AD_ACCOUNT_ID as string;
+    // Must be the account actually being read (OAuth-connected or env), never
+    // the env var — otherwise an OAuth sync would stamp rows with someone
+    // else's account id and the two accounts' data would cross.
+    const acctId = (await import("@/lib/meta")).currentAccountId();
 
     // 1. Campaign shells (id, name, status, objective, daily budget)
     const allShells = await fetchMetaCampaignList();

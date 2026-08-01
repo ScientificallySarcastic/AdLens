@@ -13,7 +13,45 @@ export { resultLadder }; // type-only import — no runtime cycle
 const graphBase = () => `https://graph.facebook.com/${process.env.META_API_VERSION || "v23.0"}`;
 
 export function metaConfigured(): boolean {
-  return Boolean(process.env.META_ACCESS_TOKEN && process.env.META_AD_ACCOUNT_ID);
+  return Boolean(currentToken() && currentAccountId());
+}
+
+/** Token for the account being read. Set per request from an OAuth connection
+ *  (see setActiveToken); falls back to the single env var so an existing
+ *  System-User setup keeps working unchanged. */
+let activeTokenOverride: string | null = null;
+
+export function setActiveToken(token: string | null | undefined) {
+  activeTokenOverride = token || null;
+}
+
+export function currentToken(): string {
+  return String(activeTokenOverride ?? process.env.META_ACCESS_TOKEN ?? "");
+}
+
+/** Resolve credentials for an ad account connected via OAuth, falling back to
+ *  the env-var account. Call before any live read so the Graph layer talks to
+ *  the right account with the right token. */
+export async function useConnectedAccount(accountId?: string | null): Promise<boolean> {
+  const { getConnectionStore } = await import("./connections");
+  try {
+    const store = getConnectionStore();
+    const id = accountId ? String(accountId).replace(/^act_/, "") : null;
+    if (id) {
+      const token = await store.tokenForAccount(id);
+      if (token) { setActiveToken(token); setActiveAccount(id); return true; }
+      return false;
+    }
+    // No explicit choice: use the first connected account, if any.
+    const accounts = await store.listAccounts();
+    if (accounts.length > 0) {
+      const token = await store.tokenForAccount(accounts[0].id);
+      if (token) { setActiveToken(token); setActiveAccount(accounts[0].id); return true; }
+    }
+  } catch {
+    // Store unavailable — fall through to env credentials.
+  }
+  return false;
 }
 
 export const LIVE_PREFIX = "meta_"; // live ids can never collide with seeded ids
@@ -238,8 +276,8 @@ export type MetaCampaignShell = {
 };
 
 export async function fetchMetaCampaignList(): Promise<MetaCampaignShell[]> {
-  const token = process.env.META_ACCESS_TOKEN as string;
-  const acct = process.env.META_AD_ACCOUNT_ID as string;
+  const token = currentToken();
+  const acct = currentAccountId();
   const url =
     `${graphBase()}/act_${acct}/campaigns` +
     `?fields=id,name,status,objective,daily_budget&limit=100&access_token=${encodeURIComponent(token)}`;
@@ -290,8 +328,8 @@ export async function fetchMetaInsights(
   window: FetchWindow,
   objectiveById: Record<string, string> = {}
 ): Promise<MetaInsightRow[]> {
-  const token = process.env.META_ACCESS_TOKEN as string;
-  const acct = process.env.META_AD_ACCOUNT_ID as string;
+  const token = currentToken();
+  const acct = currentAccountId();
 
   const fields = "campaign_id,spend,impressions,clicks,ctr,cpc,cpm,reach,frequency,actions,action_values,purchase_roas";
   const url =
@@ -486,8 +524,8 @@ export type AccessibleAccount = {
 };
 
 export async function fetchAccessibleAdAccounts(): Promise<AccessibleAccount[]> {
-  if (!process.env.META_ACCESS_TOKEN) return [];
-  const token = process.env.META_ACCESS_TOKEN as string;
+  if (!currentToken()) return [];
+  const token = currentToken();
   const url =
     `${graphBase()}/me/adaccounts` +
     `?fields=account_id,name,currency,timezone_name,account_status,business{id,name}` +
@@ -724,7 +762,7 @@ export type MetaAdShell = { id: string; adsetId: string; name: string; format: s
  *  Parentage comes from the edge we queried, so it cannot be wrong — unlike
  *  the account-wide call, which depends on each row reporting campaign_id. */
 export async function fetchAdsetsForCampaign(campaignId: string): Promise<MetaAdsetShell[]> {
-  const token = process.env.META_ACCESS_TOKEN as string;
+  const token = currentToken();
   const url =
     `${graphBase()}/${campaignId}/adsets` +
     `?fields=id,name,status,daily_budget,optimization_goal,destination_type,promoted_object` +
@@ -749,7 +787,7 @@ export async function fetchAdsetsForCampaign(campaignId: string): Promise<MetaAd
 
 /** Ads belonging to ONE ad set: GET /{adset_id}/ads. */
 export async function fetchAdsForAdset(adsetId: string): Promise<MetaAdShell[]> {
-  const token = process.env.META_ACCESS_TOKEN as string;
+  const token = currentToken();
   const url =
     `${graphBase()}/${adsetId}/ads` +
     `?fields=id,name,status,preview_shareable_link,` +
@@ -774,8 +812,8 @@ export async function fetchAdsForAdset(adsetId: string): Promise<MetaAdShell[]> 
 }
 
 export async function fetchMetaAdsets(): Promise<MetaAdsetShell[]> {
-  const token = process.env.META_ACCESS_TOKEN as string;
-  const acct = process.env.META_AD_ACCOUNT_ID as string;
+  const token = currentToken();
+  const acct = currentAccountId();
   const url =
     `${graphBase()}/act_${acct}/adsets` +
     `?fields=id,name,campaign_id,status,daily_budget,optimization_goal,destination_type` +
@@ -801,8 +839,8 @@ function mapFormat(objectType?: string): "Image" | "Video" | "Carousel" {
 }
 
 export async function fetchMetaAds(): Promise<MetaAdShell[]> {
-  const token = process.env.META_ACCESS_TOKEN as string;
-  const acct = process.env.META_AD_ACCOUNT_ID as string;
+  const token = currentToken();
+  const acct = currentAccountId();
   const url =
     `${graphBase()}/act_${acct}/ads` +
     `?fields=id,name,adset_id,status,preview_shareable_link,` +
@@ -839,8 +877,8 @@ async function fetchLevelInsights(
   level: "adset" | "ad", window: FetchWindow,
   objective?: string, goal?: string, dest?: string
 ): Promise<MetaLevelRow[]> {
-  const token = process.env.META_ACCESS_TOKEN as string;
-  const acct = process.env.META_AD_ACCOUNT_ID as string;
+  const token = currentToken();
+  const acct = currentAccountId();
   const idField = level === "adset" ? "adset_id" : "ad_id";
   void objective;
   const fields = `${idField},spend,impressions,clicks,ctr,cpc,frequency,reach,actions,purchase_roas`;
@@ -872,8 +910,8 @@ export const fetchMetaAdInsights = (w: FetchWindow, objective?: string, goal?: s
 
 /** The ad account's reporting currency — so the UI never mislabels ₹ as $. */
 export async function fetchAccountCurrency(): Promise<string> {
-  const token = process.env.META_ACCESS_TOKEN as string;
-  const acct = process.env.META_AD_ACCOUNT_ID as string;
+  const token = currentToken();
+  const acct = currentAccountId();
   try {
     const json = await graphGet(
       `${graphBase()}/act_${acct}?fields=currency&access_token=${encodeURIComponent(token)}`
@@ -1176,7 +1214,7 @@ export async function fetchAccountInfo(force = false): Promise<AccountInfo | nul
     if (cached) { accountMemo = { at: Date.now(), value: cached }; return cached; }
   }
 
-  const token = process.env.META_ACCESS_TOKEN as string;
+  const token = currentToken();
   try {
     const json = await graphGet(
       `${graphBase()}/act_${acct}?fields=name,currency,timezone_name&access_token=${encodeURIComponent(token)}`

@@ -12,6 +12,12 @@ export const revalidate = 0;
 export const fetchCache = "force-no-store";
 
 export async function GET(req: Request) {
+  // An OAuth-connected account supplies its own token, so "configured" is true
+  // for any user who clicked Connect — no env vars, no redeploy.
+  const requestedAccount = new URL(req.url).searchParams.get("account");
+  const { useConnectedAccount } = await import("@/lib/meta");
+  await useConnectedAccount(requestedAccount);
+
   if (!metaConfigured()) {
     return NextResponse.json({ configured: false, campaigns: [], reason: "no-credentials" }, NO_STORE);
   }
@@ -27,8 +33,20 @@ export async function GET(req: Request) {
       discoveryError = e?.hint ?? e?.message ?? "could not list ad accounts";
     }
 
+    // Accounts connected through OAuth are first-class here too.
+    try {
+      const { getConnectionStore } = await import("@/lib/connections");
+      const connected = await getConnectionStore().listAccounts();
+      const seen = new Set(accessible.map((a) => String(a.id)));
+      for (const c of connected) {
+        if (!seen.has(c.id)) {
+          accessible.push({ id: c.id, name: c.name, currency: c.currency, timezone: c.timezone, business: c.business, status: c.status } as typeof accessible[number]);
+        }
+      }
+    } catch { /* connection store unavailable — env credentials still work */ }
+
     // Which account this request is about: explicit choice, else the default.
-    const requested = new URL(req.url).searchParams.get("account");
+    const requested = requestedAccount;
     if (requested) setActiveAccount(requested);
 
     const account = await fetchAccountInfo();

@@ -25,9 +25,25 @@ by the 15-minute TTL for OAuth tokens.
 
 ```
 DATABASE_URL=postgres://…          # already set if you use live sync
-PARTNER_ADMIN_TOKEN=<random>       # guards the provisioning endpoint
-PARTNER_JWT_SECRET=<random>        # signs OAuth access tokens
+PARTNER_ADMIN_TOKEN=<random>       # REQUIRED — guards the provisioning endpoint
+PARTNER_JWT_SECRET=<random>        # REQUIRED — signs OAuth access tokens
 ```
+
+### Where the admin token comes from
+
+`PARTNER_ADMIN_TOKEN` is a value **you choose** when deploying (any long random
+string — `openssl rand -hex 32`), set in your host's environment variables
+(Vercel → Project → Settings → Environment Variables). It is shared **once** with
+the team who onboards partners — it is not created per partner, and partners
+never see it. Store it in your password manager.
+
+Running locally, the login screen shows the development token and fills it for
+you on click.
+
+**These two vars fail closed in production.** With `NODE_ENV=production` and no
+`PARTNER_ADMIN_TOKEN`, every admin request is rejected (the dev default is never
+honoured), and a missing `PARTNER_JWT_SECRET` throws rather than signing tokens
+with a publicly-known secret. A deploy that forgets them is sealed, not open.
 
 ## 1. Create a partner — two ways
 

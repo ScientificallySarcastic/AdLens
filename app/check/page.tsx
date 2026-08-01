@@ -89,6 +89,45 @@ export default function Check() {
     : null;
   const stale = syncAgeHours != null && syncAgeHours > 36;
 
+  // ── Connect with Facebook ────────────────────────────────────────
+  // The user grants access on Meta's own consent screen; we never ask them to
+  // create an app or paste a token.
+  const [conn, setConn] = useState<{ oauthConfigured: boolean; connections: { id: string; fbUserName: string }[] } | null>(null);
+  const [connectMsg, setConnectMsg] = useState<{ kind: "success" | "error" | "cancelled" | "empty"; text: string } | null>(null);
+
+  const refreshConnections = () =>
+    fetch("/api/connections", { cache: "no-store" }).then((r) => r.json()).then(setConn).catch(() => setConn(null));
+
+  useEffect(() => { refreshConnections(); }, []);
+
+  // Read the outcome the OAuth callback redirected back with, then clean the URL.
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const status = p.get("connect");
+    if (!status) return;
+    const reason = p.get("reason") ?? "";
+    if (status === "success") {
+      setConnectMsg({ kind: "success", text: `Connected ${p.get("who") ?? "your Meta account"} — ${p.get("accounts")} ad account(s) available below.` });
+      refreshConnections();
+      fetch(`/api/db/accounts?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.json()).then(setLive).catch(() => {});
+    } else if (status === "cancelled") {
+      setConnectMsg({ kind: "cancelled", text: "Connection cancelled — no access was granted." });
+    } else if (status === "empty") {
+      setConnectMsg({ kind: "empty", text: reason || "No ad accounts were shared." });
+    } else {
+      setConnectMsg({ kind: "error", text: reason || "Could not connect." });
+    }
+    window.history.replaceState({}, "", window.location.pathname);
+  }, []);
+
+  async function disconnect(id: string) {
+    await fetch(`/api/connections?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+    await refreshConnections();
+    const fresh = await fetch(`/api/db/accounts?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.json()).catch(() => null);
+    if (fresh) setLive(fresh);
+    setAcctByPlat((prev) => ({ ...prev, meta: "" }));
+  }
+
   const liveAcct = liveAccts.length === 0 && live?.configured && live.account
     ? [{ id: "live", name: live.account.name, sub: `act_${live.account.id} · ${live.account.currency}` }]
     : liveAccts;
@@ -217,6 +256,47 @@ export default function Check() {
                     </button>
                   ))}
                 </div>
+
+                {/* Self-service connection — Meta only */}
+                {pid === "meta" && (
+                  <div className="mt-3 rounded-2xl border border-line px-4 py-3.5" style={{ background: "var(--hero-grad-soft)" }}>
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div>
+                        <div className="text-[13px] font-bold">Don&rsquo;t see your account?</div>
+                        <div className="text-[11.5px] text-mut font-medium mt-0.5">
+                          Connect with Facebook and pick the ad accounts to share — no app setup, no access token.
+                        </div>
+                      </div>
+                      {conn?.oauthConfigured === false ? (
+                        <span className="pill-mut">Connect unavailable — not configured</span>
+                      ) : (
+                        <a href="/api/auth/meta" className="btn-primary shrink-0">
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                            <path d="M24 12.07C24 5.4 18.63 0 12 0S0 5.4 0 12.07C0 18.1 4.39 23.1 10.13 24v-8.44H7.08v-3.49h3.05V9.41c0-3.02 1.79-4.69 4.53-4.69 1.31 0 2.68.24 2.68.24v2.95h-1.51c-1.49 0-1.96.93-1.96 1.89v2.27h3.33l-.53 3.49h-2.8V24C19.61 23.1 24 18.1 24 12.07z" />
+                          </svg>
+                          Connect with Facebook
+                        </a>
+                      )}
+                    </div>
+
+                    {connectMsg && (
+                      <div className="mt-3 text-[12px] font-bold" style={{
+                        color: connectMsg.kind === "success" ? "var(--good)" : connectMsg.kind === "error" ? "var(--bad)" : "var(--warn)",
+                      }}>{connectMsg.text}</div>
+                    )}
+
+                    {(conn?.connections?.length ?? 0) > 0 && (
+                      <div className="mt-3 pt-3 border-t border-line space-y-1.5">
+                        {conn!.connections.map((c) => (
+                          <div key={c.id} className="flex items-center justify-between gap-3 text-[11.5px]">
+                            <span className="font-semibold">Connected as {c.fbUserName || c.id}</span>
+                            <button onClick={() => disconnect(c.id)} className="text-mut hover:text-bad font-bold transition-colors">Disconnect</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
             {syncMsg && <div className="mb-3 text-[12px] font-bold text-accent">{syncMsg}</div>}
