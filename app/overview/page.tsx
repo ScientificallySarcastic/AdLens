@@ -88,9 +88,9 @@ export default function Overview() {
       <div className="grid grid-cols-5 gap-3 mb-5">
         <KpiHero i={0} label="Total spend" icon={Wallet} value={totals.spend} prefix="$" sub="this month" />
         <KpiHero i={1} label="Revenue" icon={DollarSign} value={totals.rev} prefix="$"
-          delta={totals.liveCount > 0 ? undefined : "↑16% MoM"} deltaTone="good" />
+        />
         <KpiHero i={2} label="Blended ROAS" icon={Target} value={totals.roas} decimals={1} suffix="x"
-          delta={totals.liveCount > 0 ? undefined : "↓0.2x MoM"} deltaTone="warn" />
+        />
         <KpiHero i={3} label="Active" icon={Activity} rawValue={`${totals.active}`} sub={`${totals.total - totals.active} paused`} />
         <motion.button initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
           onClick={() => router.push("/alerts")}

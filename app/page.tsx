@@ -72,9 +72,9 @@ export default function Home() {
 
       {/* ── Portfolio KPIs ────────────────────────────────────── */}
       <div className="grid grid-cols-4 gap-3 mb-6">
-        <KpiHero i={0} label="Spend / mo" icon={Wallet} value={spend} prefix="$" delta="↑12% MoM" deltaTone="neutral" sub="all active" />
-        <KpiHero i={1} label="Revenue / mo" icon={DollarSign} value={rev} prefix="$" delta="↑16% MoM" deltaTone="good" />
-        <KpiHero i={2} label="Blended ROAS" icon={Target} value={roas} decimals={1} suffix="x" delta="↓0.2x MoM" deltaTone="warn" />
+        <KpiHero i={0} label="Spend / mo" icon={Wallet} value={spend} prefix="$" sub="all active" />
+        <KpiHero i={1} label="Revenue / mo" icon={DollarSign} value={rev} prefix="$" />
+        <KpiHero i={2} label="Blended ROAS" icon={Target} value={roas} decimals={1} suffix="x" />
         <KpiHero i={3} label="Leaking spend" icon={MousePointerClick} value={1780} prefix="$" delta={`${critical} critical`} deltaTone="bad" sub="below break-even" alert />
       </div>
 

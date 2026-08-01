@@ -8,6 +8,7 @@
 
 import { dataSource } from "./datasource";
 import { sym } from "./currency";
+import { weekOverWeek as wowCompare, monthOverMonth, type PeriodComparison } from "./periods";
 
 export interface Evidence {
   campaign: { id: string; name: string; platform: string; spend: number; revenue: number; roas: number; ctr: number; cpc: number; conv: number; pacing: number };
@@ -29,6 +30,9 @@ export interface Evidence {
   scaleCandidates: string[];
   saturating: string[];
   weekOverWeek: { ctrPct: number; cpaPct: number; revPct: number };
+  /** Full period-over-period breakdowns, with ratios recomputed from totals
+   *  (not averaged) and marked non-comparable when history is too short. */
+  periods: { wow: PeriodComparison; mom: PeriodComparison };
   /** Reporting context — prevents ROAS-framed verdicts on accounts with no revenue signal. */
   reporting: {
     currency: string;           // ISO code from the ad account (e.g. "INR", "USD")
@@ -307,6 +311,7 @@ export async function buildEvidence(campaignId: string): Promise<Evidence | null
       .filter(a => a.freq > 7 || (a.reachPct > 0 && a.reachPct > 90))
       .map(a => `${a.name} (freq ${a.freq}${a.reachPct > 0 ? `, reach ${a.reachPct}%` : ", reach not reported"})`),
     weekOverWeek: wow,
+    periods: { wow: wowCompare(series), mom: monthOverMonth(series) },
     reporting: { currency, revenueTracked, conversionBasis: revenueTracked ? "purchases" : "platform-reported actions (no purchase value)", caveats },
   };
 }
@@ -626,8 +631,38 @@ export function verifyCitations(
   const STRUCTURAL = ["1", "2", "3", "7", "14", "30", "100"];
   STRUCTURAL.forEach((n) => allowed.add(n));
 
-  const isAllowed = (n: string, set: Set<string>) =>
-    set.has(n) || set.has(String(parseFloat(n)));
+  // A cited figure counts as verified when it IS an evidence value, or when it
+  // is that value rounded for prose ("₹4,960" → "about 5,000"). Rounding is
+  // legitimate writing, not fabrication; the tolerance is tight enough that a
+  // materially different number still fails.
+  const numericAllowed = (set: Set<string>): number[] =>
+    Array.from(set).map(Number).filter((n) => Number.isFinite(n));
+
+  const isRoundingOf = (n: number, pool: number[]) =>
+    pool.some((v) => {
+      if (v === n) return true;
+      if (v === 0) return false;
+      const rel = Math.abs(v - n) / Math.abs(v);
+      // ≤2% away AND a rounder number than the source (fewer significant digits).
+      return rel <= 0.02 && String(Math.abs(n)).replace(/\D/g, "").replace(/0+$/, "").length
+        <= String(Math.abs(v)).replace(/\D/g, "").length;
+    });
+
+  const poolCache = new WeakMap<Set<string>, number[]>();
+  const poolOf = (set: Set<string>) => {
+    let p = poolCache.get(set);
+    if (!p) { p = numericAllowed(set); poolCache.set(set, p); }
+    return p;
+  };
+
+  const isAllowed = (n: string, set: Set<string>) => {
+    if (set.has(n) || set.has(String(parseFloat(n)))) return true;
+    const num = parseFloat(n);
+    if (!Number.isFinite(num)) return false;
+    // Calendar years in prose ("since 2026") are not performance claims.
+    if (Number.isInteger(num) && num >= 2020 && num <= 2035) return true;
+    return isRoundingOf(num, poolOf(set));
+  };
 
   const cited = (reply.match(/\d+(?:[.,]\d+)?/g) || []).map((n) => n.replace(/,/g, ""));
   const unverified = cited.filter((n) => !isAllowed(n, allowed));

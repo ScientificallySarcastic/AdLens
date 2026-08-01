@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid, AreaChart, Area } from "recharts";
-import { FileText, Wallet, DollarSign, Target, MousePointerClick, Coins, Repeat, TrendingUp, Activity, Users } from "lucide-react";
+import { FileText, Wallet, DollarSign, Target, MousePointerClick, Coins, Repeat, TrendingUp, Activity, Users, RefreshCw } from "lucide-react";
 import { getCampaign, adsetsFor, series30 } from "@/lib/data";
 import type { Campaign, AdSet } from "@/lib/data";
 import { sym } from "@/lib/currency";
@@ -18,6 +18,8 @@ import PacingCard from "@/components/PacingCard";
 import AISummary from "@/components/AISummary";
 import InsightCard from "@/components/InsightCard";
 import ChartCard, { TOOLTIP_STYLE, AXIS_TICK } from "@/components/ChartCard";
+import PeriodCompare from "@/components/PeriodCompare";
+import type { PeriodComparison } from "@/lib/periods";
 import clsx from "clsx";
 
 // which direction is GOOD for each metric — so colours mean something, not math
@@ -96,8 +98,30 @@ export default function Analysis({ params }: { params: { id: string } }) {
 
   const c = isLive ? liveData?.campaign ?? null : getCampaign(id) ?? null;
   const cur = sym(isLive ? liveData?.currency ?? c?.currency : "USD");
-  const [tab, setTab] = useState<"overview" | "adsets" | "ads" | "audience">("overview");
+  const [tab, setTab] = useState<"overview" | "trends" | "adsets" | "ads" | "audience">("overview");
+
+  // Real WoW / MoM for this campaign, computed server-side from the daily
+  // series. Never rendered until it arrives — no placeholder percentages.
+  const [periods, setPeriods] = useState<{ wow: PeriodComparison; mom: PeriodComparison } | null>(null);
+  const [periodsError, setPeriodsError] = useState<string | null>(null);
+
+  // Fetched once per campaign, not per tab switch.
+  useEffect(() => {
+    let cancelled = false;
+    setPeriods(null);
+    setPeriodsError(null);
+    fetch(`/api/db/periods?campaign=${encodeURIComponent(id)}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled) return;
+        if (d?.error) setPeriodsError(String(d.error));
+        else setPeriods({ wow: d.wow, mom: d.mom });
+      })
+      .catch((e) => { if (!cancelled) setPeriodsError(e?.message ?? "network error"); });
+    return () => { cancelled = true; };
+  }, [id]);
   const [compare, setCompare] = useState(false);
+
   const [preset, setPreset] = useState<(typeof PRESETS)[number]>("Monthly");
   const [from, setFrom] = useState("2025-06-01");
   const [to, setTo] = useState("2025-06-30");
@@ -302,7 +326,16 @@ export default function Analysis({ params }: { params: { id: string } }) {
           <HealthScore score={healthScore} size={84}
             detail={anomalies.length ? `${anomalies.length} ${anomalies.length === 1 ? "anomaly" : "anomalies"} detected` : "no anomalies in window"} />
           <div className="flex flex-col gap-2 items-end">
-            <button onClick={() => router.push("/reporting")} className="btn-primary"><FileText size={14} /> Generate report</button>
+            <div className="flex items-center gap-2">
+              {isLive && (
+                <button onClick={resync} disabled={syncing} className="btn-ghost" title="Refresh only this campaign from the Meta Ads API">
+                  <RefreshCw size={13} className={syncing ? "animate-spin" : undefined} />
+                  {syncing ? "Syncing…" : "Sync campaign"}
+                </button>
+              )}
+              <button onClick={() => router.push("/reporting")} className="btn-primary"><FileText size={14} /> Generate report</button>
+            </div>
+            {syncMsg && <div className="text-[11px] font-semibold text-accent">{syncMsg}</div>}
             <label className="flex items-center gap-2 text-[12px] font-semibold text-mut cursor-pointer">
               Compare periods
               <button onClick={() => { setCompare(!compare); if (!compare) setTab("overview"); }}
@@ -605,11 +638,11 @@ export default function Analysis({ params }: { params: { id: string } }) {
 
       {/* ── Tabs ──────────────────────────────────────────────── */}
       <div className="flex gap-1 p-1 rounded-xl bg-raised w-fit mb-5">
-        {(["overview", "adsets", "ads", "audience"] as const).map((t) => (
+        {(["overview", "trends", "adsets", "ads", "audience"] as const).map((t) => (
           <button key={t} onClick={() => setTab(t)}
             className={clsx("relative px-4 py-2 text-[13px] font-bold rounded-lg capitalize transition-colors", tab === t ? "text-ink" : "text-mut hover:text-ink")}>
             {tab === t && <motion.span layoutId="tab-pill" className="absolute inset-0 bg-surface rounded-lg shadow-card" transition={{ type: "spring", stiffness: 400, damping: 34 }} />}
-            <span className="relative z-10">{t === "adsets" ? "Ad sets" : t === "ads" ? "Creatives" : t === "audience" ? "Audience" : "Overview"}</span>
+            <span className="relative z-10">{t === "adsets" ? "Ad sets" : t === "ads" ? "Creatives" : t === "audience" ? "Audience" : t === "trends" ? "WoW / MoM" : "Overview"}</span>
           </button>
         ))}
       </div>
@@ -742,6 +775,20 @@ export default function Analysis({ params }: { params: { id: string } }) {
                   </ResponsiveContainer>
                 </ChartCard>
               </div>
+            </>
+          )}
+
+          {tab === "trends" && (
+            <>
+              {periodsError && (
+                <div className="card p-5 text-[13px] font-semibold" style={{ color: "var(--bad)" }}>
+                  Could not load the period comparison — {periodsError}
+                </div>
+              )}
+              {!periodsError && !periods && (
+                <div className="card p-8 text-center text-[13px] text-mut font-medium">Loading period comparison…</div>
+              )}
+              {periods && <PeriodCompare wow={periods.wow} mom={periods.mom} currency={cur} />}
             </>
           )}
 

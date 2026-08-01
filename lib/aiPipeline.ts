@@ -191,6 +191,26 @@ export interface QueryContext {
   retrieval: RetrievalResult;
   /** Findings computed from the evidence — the analysis the model must use. */
   findings: ReturnType<typeof analyze>;
+  /** True when the evidence pack was reused from a previous question about the
+   *  same campaign and snapshot, rather than rebuilt. */
+  cached: boolean;
+}
+
+// Evidence assembly is the expensive part (campaign + ad sets + ads + daily
+// series). Follow-up questions about the SAME campaign reuse it instead of
+// rebuilding: the underlying snapshot cannot have changed unless a sync ran,
+// and `syncedAt` is part of the key, so a re-sync invalidates the entry.
+const CONTEXT_TTL_MS = 10 * 60 * 1000;
+const contextCache = new Map<string, { at: number; evidence: Evidence }>();
+
+function cacheKey(campaignId: string, syncedAt: string | null) {
+  return `${campaignId}::${syncedAt ?? "static"}`;
+}
+
+/** Dropped when an account is disconnected or a sync writes new rows. */
+export function invalidateContextCache(campaignId?: string) {
+  if (!campaignId) return contextCache.clear();
+  Array.from(contextCache.keys()).forEach((k) => { if (k.startsWith(`${campaignId}::`)) contextCache.delete(k); });
 }
 
 export async function buildContext(
@@ -198,7 +218,25 @@ export async function buildContext(
   parsed: ParsedQuery,
   retrieval: RetrievalResult,
 ): Promise<QueryContext | null> {
-  const evidence = await buildEvidence(campaignId);
+  const key = cacheKey(campaignId, retrieval.syncedAt);
+  const hit = contextCache.get(key);
+
+  let evidence: Evidence | null;
+  let cached = false;
+  if (hit && Date.now() - hit.at < CONTEXT_TTL_MS && !retrieval.refreshed) {
+    evidence = hit.evidence;          // same campaign, same snapshot → reuse
+    cached = true;
+  } else {
+    evidence = await buildEvidence(campaignId);
+    if (evidence) {
+      contextCache.set(key, { at: Date.now(), evidence });
+      // Bound the map — this is a per-instance cache, not a store.
+      if (contextCache.size > 50) {
+        const oldest = Array.from(contextCache.keys())[0];
+        if (oldest) contextCache.delete(oldest);
+      }
+    }
+  }
   if (!evidence) return null;
 
   // Pacing and status are part of the answerable surface, so they travel with
@@ -217,7 +255,7 @@ export async function buildContext(
     }));
   }
 
-  return { evidence, parsed, retrieval, findings: analyze(parsed.raw, evidence) };
+  return { evidence, parsed, retrieval, findings: analyze(parsed.raw, evidence), cached };
 }
 
 /* ── Stage 6: generate ────────────────────────────────────────────── */
@@ -229,7 +267,7 @@ export type PipelineAnswer =
       provider?: string;
       model?: string;
       stages: string[];
-      retrieval: { live: boolean; refreshed: boolean; syncedAt: string | null };
+      retrieval: { live: boolean; refreshed: boolean; syncedAt: string | null; cached: boolean };
       verified: boolean;
     }
   | { ok: false; reason: string; detail?: string; stages: string[] };
@@ -267,10 +305,10 @@ export async function generateAnswer(ctx: QueryContext, stages: string[]): Promi
     computedFindings: ctx.findings,
   };
 
-  const llm = await generateNarrative(
-    `${ANALYST_SYSTEM}\n\n${taskHint(ctx.parsed)}`,
-    `Data retrieved for this question:\n${JSON.stringify(payload)}\n\nQuestion: ${ctx.parsed.raw}`,
-  );
+  const system = `${ANALYST_SYSTEM}\n\n${taskHint(ctx.parsed)}`;
+  const user = `Data retrieved for this question:\n${JSON.stringify(payload)}\n\nQuestion: ${ctx.parsed.raw}`;
+
+  const llm = await generateNarrative(system, user);
   stages.push("generate");
 
   if (!llm.ok) {
@@ -284,8 +322,29 @@ export async function generateAnswer(ctx: QueryContext, stages: string[]): Promi
     };
   }
 
-  const check = verifyCitations(llm.text, ctx.evidence);
+  let text = llm.text;
+  let check = verifyCitations(text, ctx.evidence);
   stages.push("verify");
+
+  // A first-pass miss is usually a figure the model derived or rounded, not one
+  // it invented. Rejecting outright left the user with nothing at all, so give
+  // exactly one corrective attempt that names the offending figures. Tolerance
+  // is unchanged — the retry must pass the same check to be shown.
+  if (!check.ok) {
+    const offending = Array.from(new Set(check.unverified.concat(check.misattributed))).slice(0, 12);
+    const retry = await generateNarrative(
+      system,
+      `${user}\n\nYour previous answer was REJECTED: these figures could not be traced to the data above — ${offending.join(", ")}.\n` +
+        `Rewrite it using ONLY figures that appear in the data. Do not derive, estimate or extrapolate new numbers, and do not attribute one ad set's figure to another. ` +
+        `Where you need a number you do not have, describe the point qualitatively instead.\n\nPrevious answer:\n${text}`,
+    );
+    stages.push("retry", "verify");
+    if (retry.ok) {
+      const recheck = verifyCitations(retry.text, ctx.evidence);
+      if (recheck.ok) { text = retry.text; check = recheck; }
+    }
+  }
+
   if (!check.ok) {
     return {
       ok: false,
@@ -297,11 +356,14 @@ export async function generateAnswer(ctx: QueryContext, stages: string[]): Promi
 
   return {
     ok: true,
-    reply: llm.text,
+    reply: text,
     provider: llm.provider,
     model: llm.model,
     stages,
-    retrieval: { live: ctx.retrieval.isLive, refreshed: ctx.retrieval.refreshed, syncedAt: ctx.retrieval.syncedAt },
+    retrieval: {
+      live: ctx.retrieval.isLive, refreshed: ctx.retrieval.refreshed,
+      syncedAt: ctx.retrieval.syncedAt, cached: ctx.cached,
+    },
     verified: true,
   };
 }

@@ -36,26 +36,45 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const { metaConfigured, fetchAccessibleAdAccounts } = await import("@/lib/meta");
-  if (!metaConfigured()) {
-    return NextResponse.json({ ran: false, reason: "no-credentials", accounts: [] });
-  }
+  const { fetchAccessibleAdAccounts } = await import("@/lib/meta");
+  const { getConnectionStore } = await import("@/lib/connections");
 
   const preset = new URL(req.url).searchParams.get("preset") || "last_7";
   const startedAt = new Date().toISOString();
 
-  // Discover accounts at run time so newly granted accounts are included
-  // automatically. If discovery fails, fall back to the configured account so
-  // a permissions blip doesn't skip the night entirely.
-  let accounts: { id: string; name: string }[] = [];
+  // EVERY account gets synced, from both sources:
+  //   • OAuth connections — each carries its own token
+  //   • the env System-User credential — whatever it can reach
+  // Deduped by ad account id, so an account present in both is synced once.
+  const byId = new Map<string, { id: string; name: string; source: "oauth" | "env" }>();
   let discoveryError: string | null = null;
+
   try {
-    accounts = (await fetchAccessibleAdAccounts()).map((a) => ({ id: a.id, name: a.name }));
+    for (const a of await getConnectionStore().listAccounts()) {
+      byId.set(a.id, { id: a.id, name: a.name || `act_${a.id}`, source: "oauth" });
+    }
   } catch (e: any) {
-    discoveryError = e?.hint ?? e?.message ?? "account discovery failed";
+    discoveryError = e?.message ?? "connected-account lookup failed";
   }
-  if (!accounts.length && process.env.META_AD_ACCOUNT_ID) {
-    accounts = [{ id: String(process.env.META_AD_ACCOUNT_ID), name: "configured account" }];
+
+  try {
+    for (const a of await fetchAccessibleAdAccounts()) {
+      if (!byId.has(a.id)) byId.set(a.id, { id: a.id, name: a.name, source: "env" });
+    }
+  } catch (e: any) {
+    // Discovery failing must not skip OAuth accounts that were found above.
+    discoveryError = discoveryError ?? e?.hint ?? e?.message ?? "account discovery failed";
+  }
+
+  // Last resort so a permissions blip never skips the night entirely.
+  if (!byId.size && process.env.META_AD_ACCOUNT_ID) {
+    const id = String(process.env.META_AD_ACCOUNT_ID);
+    byId.set(id, { id, name: "configured account", source: "env" });
+  }
+
+  const accounts = Array.from(byId.values());
+  if (!accounts.length) {
+    return NextResponse.json({ ran: false, reason: "no-accounts-connected", accounts: [], discoveryError });
   }
 
   // Sequential, not parallel: the Graph API rate-limits per account and the
@@ -69,6 +88,7 @@ export async function GET(req: Request) {
       results.push({
         account: acct.id,
         name: acct.name,
+        source: acct.source,
         ok: Boolean(body?.synced),
         campaigns: body?.campaigns ?? 0,
         adsets: body?.adsets ?? 0,
@@ -77,7 +97,7 @@ export async function GET(req: Request) {
       });
     } catch (e: any) {
       // One account failing must not stop the rest of the schedule.
-      results.push({ account: acct.id, name: acct.name, ok: false, error: e?.message ?? "sync failed" });
+      results.push({ account: acct.id, name: acct.name, source: acct.source, ok: false, error: e?.message ?? "sync failed" });
     }
   }
 

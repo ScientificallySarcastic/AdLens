@@ -27,6 +27,7 @@ Other commands:
 ```bash
 npm run build && npm start   # production build, → http://localhost:3000
 npm test                     # unit tests (date ranges, intent, citations)
+npx tsx tests/periods.test.mts         # WoW / MoM comparison
 npx tsx tests/pacing-status.test.mts   # pacing + status
 npx tsx tests/ai-pipeline.test.mts     # AI retrieval ordering, no canned answers
 npx tsx tests/oauth.test.mts           # OAuth token-encryption + CSRF
@@ -94,6 +95,8 @@ automatically on first use — no migration step. Full setup: [CONNECT-META.md](
 - `app/api/ai/chat` — runs that pipeline. If retrieval fails or no model is configured it returns an explicit error; there is no templated answer path.
 - `lib/pacing.ts` — time-aware pacing (spend vs budget × elapsed time) for campaigns and ad sets.
 - `lib/status.ts` — Meta `effective_status` → Active / Paused / Archived / In Review.
+- `lib/periods.ts` — week-over-week and month-over-month. Ratios are recomputed from period totals (never averaged across days), and a comparison is withheld when either window lacks history.
+- `app/api/cron/sync` — nightly 02:00 UTC sync of **every** account, OAuth-connected and env-credential alike (schedule in `vercel.json`).
 - `lib/store.ts` — Zustand: selected campaign drives AI panel visibility (only shows after a campaign is chosen).
 
 
