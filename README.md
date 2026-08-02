@@ -1,102 +1,196 @@
-# AdLens — AI-Powered Ad Campaign Intelligence
+# fastrill
 
-Know **why** your campaign is underperforming — in one click, not 40 minutes of Ads Manager digging.
+**WhatsApp AI customer service platform for service businesses.**  
+Any salon, clinic, spa, restaurant, or agency can deploy an AI agent that replies instantly, books appointments, captures leads, and runs campaigns — all through WhatsApp.
 
-Built for HackAdTech – AI. Next.js 14 · TypeScript · Tailwind · Framer Motion · Recharts · Zustand.
+---
 
-## Run it locally
+## What it does
 
-**Prerequisite:** Node.js 18.17 or newer (`node -v` to check). Nothing else — no
-database, no Docker, no API keys.
+- **AI Conversations** — Sarvam AI replies to customers 24/7 in any language
+- **Automatic Booking** — AI collects service, date, time and books without human intervention
+- **Lead Recovery** — Identifies cold leads and auto-sends win-back messages
+- **Campaigns** — Broadcast WhatsApp messages to segmented customer lists
+- **Dashboard** — Real-time conversations, bookings calendar, analytics, CRM
 
-```bash
-# 1. unzip / clone, then from the project folder:
-npm install          # ~1 min
+---
 
-# 2. start the dev server
-npm run dev          # → http://localhost:3000
+## Tech Stack
+
+| Layer | Tech |
+|-------|------|
+| Frontend | Next.js 16 (App Router), React |
+| Backend | Next.js API Routes (serverless) |
+| Database | Supabase (Postgres + Realtime) |
+| Auth | Supabase Auth |
+| AI | Sarvam AI (`sarvam-m` model) |
+| WhatsApp | Meta WhatsApp Business API (Cloud API) |
+| Deployment | Vercel |
+
+---
+
+## Project Structure
+
+```
+fastrill/
+├── app/
+│   ├── api/
+│   │   ├── meta/webhook/route.js     ← WhatsApp webhook (core AI engine)
+│   │   └── whatsapp/send/route.js    ← Server-side WA message sender
+│   ├── dashboard/
+│   │   ├── page.jsx                  ← Revenue Engine
+│   │   ├── conversations/page.jsx    ← Real-time chat
+│   │   ├── bookings/page.jsx         ← Booking management
+│   │   ├── campaigns/page.jsx        ← Campaign broadcast
+│   │   ├── leads/page.jsx            ← Lead recovery
+│   │   ├── contacts/page.jsx         ← Customer CRM
+│   │   ├── analytics/page.jsx        ← Analytics
+│   │   └── settings/page.jsx         ← Business settings + AI Brain
+│   └── onboarding/page.jsx           ← New business setup wizard
+├── components/
+│   ├── Toast.jsx                     ← Toast notification system
+│   ├── ErrorBoundary.jsx             ← React error boundary
+│   └── Skeleton.jsx                  ← Loading skeleton components
+├── lib/
+│   ├── supabase.js                   ← Supabase client
+│   ├── env.js                        ← Environment variable validation
+│   └── hooks/
+│       ├── useAuth.js                ← Auth guard hook
+│       └── useTheme.js               ← Theme + color tokens hook
+└── sql/
+    ├── rls-policies.sql              ← Row Level Security (run once)
+    ├── migration-full.sql            ← All table migrations
+    └── realtime-enable.sql           ← Enable realtime on tables
 ```
 
-Open **http://localhost:3000** and you're in. The app runs on a deterministic
-seeded dataset (55 campaigns, 230+ ad sets, 90 days of metrics with embedded
-fatigue / saturation / ROAS-crash patterns), so every screen has realistic data
-on first load.
+---
 
-Other commands:
+## Environment Setup
 
 ```bash
-npm run build && npm start   # production build, → http://localhost:3000
-npm test                     # unit tests (date ranges, intent, citations)
-npx tsx tests/periods.test.mts         # WoW / MoM comparison
-npx tsx tests/pacing-status.test.mts   # pacing + status
-npx tsx tests/ai-pipeline.test.mts     # AI retrieval ordering, no canned answers
-npx tsx tests/oauth.test.mts           # OAuth token-encryption + CSRF
+cp .env.example .env.local
 ```
 
-Port already in use? `npm run dev -- -p 3001`.
+Fill in `.env.local`:
 
-### Where to click first
+| Variable | Where to get it | Required |
+|----------|----------------|----------|
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase → Settings → API | ✅ Yes |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase → Settings → API | ✅ Yes |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Settings → API | ✅ Yes |
+| `WEBHOOK_VERIFY_TOKEN` | Any random string you choose | ✅ Yes |
+| `SARVAM_API_KEY` | dashboard.sarvam.ai | Optional (degrades to rule-based AI) |
 
-| Page | Path |
-| --- | --- |
-| Today's brief | `/` |
-| Campaign portfolio | `/overview` |
-| Account wizard (+ Connect with Facebook) | `/check` |
+---
 
-### Optional: real Claude-powered AI chat
-
-Create a `.env.local` file in the project root:
+## Local Development
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-...
+npm install
+npm run dev
+# Open http://localhost:3000
 ```
 
-Restart `npm run dev`. The Ask AI panel then streams real Claude analysis
-grounded in the selected campaign's metrics JSON. Without it, a deterministic
-rule-based responder answers from the same data — so the demo never breaks.
+---
 
-### Optional: live Meta data + self-service account connection
+## Database Setup
 
-Also in `.env.local` (all optional — the app runs fine without them):
+Run these SQL files in **Supabase SQL Editor** (in order):
+
+```
+1. sql/migration-full.sql       ← Creates all tables
+2. sql/realtime-enable.sql      ← Enables realtime on messages/conversations
+3. sql/rls-policies.sql         ← Enables Row Level Security (IMPORTANT)
+```
+
+---
+
+## Deployment (Vercel)
 
 ```bash
-DATABASE_URL=postgres://...        # Neon; enables live sync + persistence
-META_APP_ID=...                    # enables "Connect with Facebook" on /check
-META_APP_SECRET=...
-TOKEN_ENCRYPTION_KEY=...           # openssl rand -hex 32
+# One-time setup
+vercel link
+vercel env add NEXT_PUBLIC_SUPABASE_URL
+vercel env add NEXT_PUBLIC_SUPABASE_ANON_KEY
+vercel env add SUPABASE_SERVICE_ROLE_KEY
+vercel env add WEBHOOK_VERIFY_TOKEN
+vercel env add SARVAM_API_KEY
+
+# Deploy
+vercel --prod
 ```
 
-For local OAuth testing, add `http://localhost:3000/api/auth/meta/callback` to
-your Meta app's **Valid OAuth Redirect URIs**. Database tables are created
-automatically on first use — no migration step. Full setup: [CONNECT-META.md](CONNECT-META.md).
+---
 
-> Without `DATABASE_URL` everything still works, but connected accounts live
-> in memory and reset when the server restarts.
+## WhatsApp Webhook Setup
 
-## What's inside
+After deploying:
 
-| Page | What it does |
-|---|---|
-| **Home** | Today's Brief — Needs action / Watch / Opportunity cards + money-on-the-table strip |
-| **Campaign overview** | Portfolio KPI strip (animated counters), 55 campaigns with sparklines, health dots, pacing bars, animated sort/filter/search |
-| **Account check** | Platform → account → campaign wizard; 1 platform = deep dive, 2+ = cross-platform |
-| **Analysis** | KPI strip, pacing gauge, anomaly chips, timeline presets (Daily/Weekly/Monthly/Overall/Custom), compare-periods A/B panel, 4 tabs |
-| **Adset drill-down** | Per-adset KPIs, CTR/CPA trends, ad cards with Scale/Pause/Monitor, AI insight |
-| **Cross-platform** | Meta vs LinkedIn, 3 plain metrics, visual bars, budget slider simulator |
-| **Reporting** | 3-step selection → report view with charts, comparison table, AI narrative, PDF export |
-| **Ledger** | Every recommendation → followed/ignored → measured outcome. 64% action rate, +31% avg improvement |
-| **Alerts** | Rules-engine alerts (ROAS/CTR/CPC/pacing thresholds) |
-| **Connect with Facebook** | Users add their own Meta ad accounts with one click — OAuth, no app setup or pasted tokens, unlimited accounts per deployment — see [CONNECT-META.md](CONNECT-META.md) |
+1. Go to **Meta Developer Console** → Your App → WhatsApp → Configuration
+2. Set Webhook URL: `https://fastrill.com/api/meta/webhook`
+3. Set Verify Token: same value as your `WEBHOOK_VERIFY_TOKEN` env var
+4. Subscribe to: `messages`
+5. Click **Verify and Save**
 
-## Architecture
+---
 
-- `lib/data.ts` — seeded deterministic dataset (the MockAdapter). Swap for Prisma + Meta Graph API in Phase 1; every page reads through this layer.
-- `lib/aiPipeline.ts` — the AI query pipeline: parse → resolve → fetch live Meta data → build context → analyze → generate. The model is only called on data that was actually retrieved.
-- `app/api/ai/chat` — runs that pipeline. If retrieval fails or no model is configured it returns an explicit error; there is no templated answer path.
-- `lib/pacing.ts` — time-aware pacing (spend vs budget × elapsed time) for campaigns and ad sets.
-- `lib/status.ts` — Meta `effective_status` → Active / Paused / Archived / In Review.
-- `lib/periods.ts` — week-over-week and month-over-month. Ratios are recomputed from period totals (never averaged across days), and a comparison is withheld when either window lacks history.
-- `app/api/cron/sync` — nightly 02:00 UTC sync of **every** account, OAuth-connected and env-credential alike (schedule in `vercel.json`).
-- `lib/store.ts` — Zustand: selected campaign drives AI panel visibility (only shows after a campaign is chosen).
+## Architecture — How a message flows
 
+```
+Customer sends WhatsApp message
+        ↓
+Meta Cloud API
+        ↓
+POST /api/meta/webhook
+        ↓
+1. Deduplicate (wa_message_id)
+2. Upsert Customer in CRM
+3. Upsert Conversation
+4. Save inbound message
+5. Check STOP/START compliance
+6. Load business intelligence (settings + AI brain + services)
+7. Detect intent (booking / pricing / location / greeting / etc.)
+8. External venue guard
+9. Instant replies (no AI) for pricing / location / hours / greeting
+10. Reschedule flow (if applicable)
+11. New booking creation (if applicable)
+12. AI reply via Sarvam sarvam-m
+        ↓
+sendAndSave() → WhatsApp Graph API + messages table
+```
 
+---
+
+## Security Checklist
+
+- [x] Row Level Security enabled on all Supabase tables
+- [x] WhatsApp access_token never exposed to browser (server route only)
+- [x] Webhook verify token validation on GET requests
+- [x] User ID scoped queries on all API routes
+- [x] Service role key server-side only
+- [ ] Rate limiting on webhook (TODO: add middleware)
+- [ ] Sentry error tracking (TODO: add before prod)
+
+---
+
+## Known Limitations
+
+- **Template campaigns**: Sending to contacts outside 24hr window requires Meta-approved templates. Current setup uses free-text which only works within 24hr conversation window.
+- **Scheduling**: Campaigns send immediately. Scheduled campaigns need a background job (Vercel Cron or Supabase Edge Functions).
+- **File uploads**: WhatsApp media (images, documents) received are acknowledged but not stored.
+
+---
+
+## Contributing
+
+1. Create a branch: `git checkout -b feature/your-feature`
+2. Make changes
+3. Test locally: `npm run dev`
+4. Check for lint errors: `npm run lint`
+5. PR to `main`
+
+---
+
+## License
+
+Private — Fastrill © 2026
