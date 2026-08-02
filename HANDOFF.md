@@ -1,0 +1,155 @@
+# AdLens — Engineering Handoff
+
+Read this before changing anything. It captures **current state**, not just design.
+Written for another engineer or AI assistant picking this up cold.
+
+---
+
+## 1. What AdLens is
+
+An AI performance analyst for ad campaigns. Rules detect problems from metrics;
+an LLM only *explains* what the rules found; every number the LLM writes is
+verified against the evidence pack before it is shown. Scored 88/100 at
+Checkpoint 1. The reviewer's headline note: *"the rules-do-detection /
+AI-does-explanation split is actually built, not just claimed."*
+
+**Never break that split.** The LLM must not be allowed to originate a metric.
+
+## 2. Two modes, one app
+
+| | Demo Mode | Live Mode |
+|---|---|---|
+| Source | `lib/data.ts` — 55 seeded campaigns, deterministic | Meta Graph API → Neon Postgres |
+| Campaign IDs | `summer-sale`, `c7`, … | `meta_<raw Meta id>` |
+| Chosen by | any id **without** the `meta_` prefix | id **starting** `meta_` |
+
+Routing is by ID prefix, in `MergedDataSource` (`lib/datasource.ts`). There is no
+global mode flag — the prefix *is* the mode. Demo Mode must keep working
+untouched; it is the graded CP1 deliverable.
+
+## 3. Live data flow
+
+```
+System User token (env)
+  → GET /act_<id>/campaigns                    campaign shells
+  → GET /act_<id>/insights?level=campaign      daily campaign metrics
+  → GET /{campaign_id}/adsets                  ad sets  (walked PER CAMPAIGN)
+  → GET /{adset_id}/ads                        ads      (walked PER AD SET)
+  → GET /act_<id>/insights?level=adset|ad      daily ad set / ad metrics
+  → upsert into meta_* tables in Neon
+  → UI reads ONLY from Neon, never from Meta directly
+```
+
+The hierarchy walk is deliberate: an earlier version fetched
+`/act_<id>/adsets` account-wide and matched on the returned `campaign_id`,
+which silently dropped ad sets. Parentage now comes from the edge queried.
+
+**There is no OAuth.** Authentication is a long-lived System User token with
+`ads_read`, stored in `META_ACCESS_TOKEN`. Multi-tenant OAuth would need Meta
+App Review and is out of scope.
+
+## 4. Environment variables
+
+| Name | Required | Notes |
+|---|---|---|
+| `DATABASE_URL` | yes | Neon pooled connection string |
+| `META_ACCESS_TOKEN` | live only | System User token, `ads_read` |
+| `META_AD_ACCOUNT_ID` | live only | digits only, no `act_` prefix |
+| `META_CURRENCY` | live only | e.g. `INR` — without it money renders as `$` |
+| `GROQ_API_KEY` / `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` / … | optional | any one enables the LLM narrative; without one the deterministic analyst answers |
+| `DATA_SOURCE` | optional | `merged` (default when Meta configured), `meta`, `mock` |
+| `LLM_PROVIDER`, `LLM_MAX_TOKENS` | optional | force a provider / raise token budget |
+
+Env vars only bind on deploy — **always redeploy after changing them.**
+
+## 5. Current state — verified
+
+- Demo Mode: all 8 pages render, seeded content and authored deltas unchanged
+- Live sync: `{"synced":true,"campaigns":2,"dayRows":26,"adsets":2,"ads":4,"currency":"INR"}`
+- Live campaign analysis renders with real values: spend ₹3,051, 252,256
+  impressions, 2.93% CTR, ₹0.41 CPC, real date range, INR
+- Provenance strip shows source, Meta campaign ID, objective, currency, range
+- Revenue/ROAS correctly show **N/A** (the account reports no purchase value)
+
+## 6. Current state — OPEN BUG
+
+**The Adset Comparison tab shows "No ad sets stored for this campaign."**
+
+Known facts:
+- Ads Manager shows campaign `PC_Traffic_Jun26` HAS 1 ad set
+  (`PC_Traffic_Parents_Hyd`) and 3 ads (`PC_TR_Carousel`, `PC_TR_Video1`,
+  `PC_TR_Video2`)
+- The sync reports `adsets: 2, ads: 4` stored account-wide
+- The UI reports "1 ad set in the account belongs to other campaigns"
+- So ad sets are being stored, but not against the campaign being viewed
+
+Three candidate causes, in likelihood order:
+
+1. **The sync has not been re-run since the hierarchical walk shipped.** The
+   stored rows are from the older account-wide fetch. → re-run
+   `/api/sync/meta?days=30`.
+2. **A migration column is missing**, so the adset read query throws. The read
+   path now surfaces this as `adsetError` in `/api/db/campaign-detail` and
+   prints it in the tab. → run `ALL_IN_ONE_live.sql`.
+3. **Orphaned rows** — `meta_adsets.campaign_id` doesn't match any
+   `meta_campaigns.id`. → `99_diagnose.sql` block 3 proves this in one query.
+
+**The single piece of evidence that resolves it:** the JSON from
+`/api/sync/meta?days=30`. It now returns a `hierarchy` array giving ad set and
+ad counts **per campaign**. That array answers the question directly. It has not
+yet been captured after the hierarchical walk shipped.
+
+## 7. Debugging order
+
+1. Run `ALL_IN_ONE_live.sql` in Neon
+2. Redeploy
+3. `GET /api/sync/meta?days=30` — read the `hierarchy` array
+4. `GET /api/db/status` — expect `db:true`, non-zero `metaCampaigns`
+5. Open a live campaign → Adset tab → it now prints the real Postgres error if
+   the read fails
+6. `04_verify.sql` for row counts + hierarchy; `99_diagnose.sql` for everything
+
+## 8. Design rules — do not violate
+
+- **No fabricated numbers in Live Mode.** Every displayed figure must trace to a
+  Graph API field or a stated calculation. Seeded literals (`↑12%`,
+  `Snapshot · Today 02:00`, `25–44 Male`) are gated behind `!isLive`.
+- **Unavailable ≠ zero.** Missing metrics render `N/A` with a reason. Days with
+  no conversions are `null` in `cpaTrend` so charts show a gap, not a zero line.
+- **Revenue comes from `conv_value`**, never `roas × spend`.
+- **Results are objective-specific** — purchases for Sales, landing page views
+  for Traffic, leads for Leads — matching Ads Manager's Results column. The KPI
+  card is labelled with what it counted.
+- **No silent fallbacks in Live Mode.** A failed live read returns an error, not
+  an empty array. (This rule was added *because* a `.catch(() => [])` disguised a
+  real failure as "no data" and cost hours.)
+- **Never widen the LLM's authority.** It receives an evidence pack and writes
+  prose; `verifyCitations` rejects any number not present in that pack.
+- **Currency via `lib/currency.ts` only.** Never hardcode `$`.
+- **Hooks before early returns.** A `useEffect` placed after the loading-state
+  return caused a hook-count crash on live campaigns.
+
+## 9. Known limitations (documented, not bugs)
+
+- Share-of-target-audience is not derivable from the Insights API — no
+  saturation percentage anywhere. Absolute peak-day reach is shown instead.
+- `verifyCitations` matches values, not entities: a real number attributed to
+  the wrong ad set would pass. Flagged at CP1; still open.
+- Campaign pacing needs a budget; when budgets live at ad set level the sum is
+  used, otherwise pacing shows "budget not reported".
+- Cross-platform compare mode is untested with a live account selected.
+
+## 10. Layout
+
+```
+lib/
+  data.ts          seeded dataset + shared types (Campaign, AdSet, AdItem)
+  datasource.ts    DataSource interface; Mock / Meta / Merged implementations
+  meta.ts          Graph API fetchers + Neon readers/mappers  ← live logic
+  meta-labels.ts   objective → result-type ladder (client-safe)
+  reasoning.ts     evidence builder, deterministic analyst, citation verifier
+  llm.ts           provider-agnostic narrative layer (7 providers)
+  currency.ts      single money-formatting helper
+app/api/sync/meta  the ONLY route that calls Meta
+app/api/db/*       read routes: status, accounts, campaign-detail, adset-detail
+```
