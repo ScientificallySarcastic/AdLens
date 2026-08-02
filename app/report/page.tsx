@@ -9,8 +9,17 @@ import { sym } from "@/lib/currency";
 interface Section { title: string; body: string }
 interface Priority { stars: number; text: string }
 interface CompareRow { metric: string; change: string; better: boolean }
+interface Fact { label: string; value: string }
 interface ReportData {
-  sections: Section[]; priorities: Priority[];
+  sections?: Section[]; priorities?: Priority[];
+  /** False when no model was reachable — the page then shows measured facts
+   *  and says the narrative is unavailable, rather than inventing prose. */
+  narrativeAvailable?: boolean;
+  facts?: Fact[];
+  verified?: boolean;
+  unverified?: string[];
+  provider?: string;
+  error?: string;
   snapshot: { syncedAt: string; mode: string };
   campaign: { name: string; spend: number; revenue: number; roas: number; conv: number; ctr: number; cpc: number };
   compareRows?: CompareRow[];
@@ -53,6 +62,9 @@ function ReportInner() {
   );
 
   const c = data.campaign;
+  const sections = data.sections ?? [];
+  const priorities = data.priorities ?? [];
+  const narrativeMissing = data.narrativeAvailable === false;
   return (
     <div className="max-w-3xl mx-auto px-8 py-7 print:p-0">
       <div className="flex items-center justify-between flex-wrap gap-3 mb-4 print:hidden no-print">
@@ -85,7 +97,39 @@ function ReportInner() {
           </div>
         </div>
 
-        {data.sections.map((s, i) => (
+        {/* No model reachable: show the measured figures, clearly labelled as
+            data rather than analysis. Nothing is written to fill the gap. */}
+        {narrativeMissing && (
+          <section className="mb-7">
+            <div className="rounded-xl px-4 py-3 mb-5 text-[13px] font-semibold border"
+                 style={{ borderColor: "rgba(var(--warn-rgb),0.35)", background: "var(--warn-soft)", color: "var(--warn)" }}>
+              The written analysis needs an AI model, and none is reachable right now
+              {data.error === "no-model-configured" ? " (no API key configured)" : ""}.
+              The measured figures below are still live — nothing has been estimated to fill the gap.
+            </div>
+            <h2 className="font-display text-[21px] tracking-tight mb-3">Measured figures</h2>
+            <table className="w-full text-[13px] border border-line rounded-xl overflow-hidden">
+              <tbody>
+                {(data.facts ?? []).map((f) => (
+                  <tr key={f.label} className="border-t border-line first:border-0">
+                    <td className="px-3.5 py-2.5 font-bold w-[38%]">{f.label}</td>
+                    <td className="px-3.5 py-2.5 num text-mut">{f.value}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        )}
+
+        {data.verified === false && (
+          <div className="rounded-xl px-4 py-3 mb-5 text-[12px] font-semibold border"
+               style={{ borderColor: "rgba(var(--warn-rgb),0.35)", background: "var(--warn-soft)", color: "var(--warn)" }}>
+            Some figures in this report could not be traced back to the retrieved data
+            {data.unverified?.length ? ` (${data.unverified.slice(0, 4).join(", ")})` : ""} — treat those with caution.
+          </div>
+        )}
+
+        {sections.map((s, i) => (
           <motion.section key={s.title} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 + i * 0.06 }} className="mb-7">
             <h2 className="font-display text-[21px] tracking-tight mb-2.5">{s.title}</h2>
             {s.body === "__METRICS_TABLE__" ? (
@@ -112,22 +156,24 @@ function ReportInner() {
           </motion.section>
         ))}
 
-        <section className="mt-8 pt-6 border-t border-line">
-          <h2 className="font-display text-[21px] tracking-tight mb-4">Priority Action Items</h2>
-          <div className="space-y-3">
-            {data.priorities.map((p, i) => (
-              <motion.div key={i} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.5 + i * 0.1 }}
-                className="flex items-center gap-3.5 rounded-xl bg-raised/60 px-3.5 py-2.5">
-                <span className="flex gap-0.5 w-[92px] shrink-0">
-                  {Array.from({ length: 5 }).map((_, s) => (
-                    <Star key={s} size={14} className={s < p.stars ? "text-warn fill-current" : "text-line2"} />
-                  ))}
-                </span>
-                <span className="text-[13.5px] font-medium">{p.text}</span>
-              </motion.div>
-            ))}
-          </div>
-        </section>
+        {priorities.length > 0 && (
+          <section className="mt-8 pt-6 border-t border-line">
+            <h2 className="font-display text-[21px] tracking-tight mb-4">Priority Action Items</h2>
+            <div className="space-y-3">
+              {priorities.map((p, i) => (
+                <motion.div key={i} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.5 + i * 0.1 }}
+                  className="flex items-center gap-3.5 rounded-xl bg-raised/60 px-3.5 py-2.5">
+                  <span className="flex gap-0.5 w-[92px] shrink-0">
+                    {Array.from({ length: 5 }).map((_, s) => (
+                      <Star key={s} size={14} className={s < p.stars ? "text-warn fill-current" : "text-line2"} />
+                    ))}
+                  </span>
+                  <span className="text-[13.5px] font-medium">{p.text}</span>
+                </motion.div>
+              ))}
+            </div>
+          </section>
+        )}
 
         <div className="mt-9 pt-4 border-t border-line text-[11px] text-mut">
           Generated by the AdLens reasoning engine — the same engine that powers the chat. All figures cited from the daily data snapshot; no numbers are model-invented.

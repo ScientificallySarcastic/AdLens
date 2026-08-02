@@ -10,6 +10,7 @@ import { PlatBadge, HealthDot } from "@/components/Badge";
 import { KpiHero } from "@/components/KpiHero";
 import PageHeader from "@/components/PageHeader";
 import clsx from "clsx";
+import { sym, money, commonCurrency, sumByCurrency, formatMixed } from "@/lib/currency";
 
 type SortKey = "spend" | "roas" | "name";
 type HealthFilter = "all" | "critical" | "watch" | "good";
@@ -44,7 +45,11 @@ export default function Overview() {
       critical: act.filter((c) => c.health === "critical").length,
       watchN: act.filter((c) => c.health === "watch").length,
       liveCount: liveCamps.length,
-      mixedCurrency: liveCamps.length > 0,
+      // Amounts in different currencies cannot be summed. When the active set
+      // spans more than one, report each separately instead of one fake total.
+      currency: commonCurrency(act),
+      spendParts: sumByCurrency(act, (c) => c.spend),
+      revParts: sumByCurrency(act, (c) => c.revenue),
     };
   }, [all, liveCamps]);
 
@@ -79,18 +84,29 @@ export default function Overview() {
           {totals.liveCount > 0
             ? <> · <span className="text-good font-bold">{totals.liveCount} live from Meta</span> · {totals.total - totals.liveCount} demo</>
             : <> · demo data</>}
-          {totals.mixedCurrency && <> · totals span more than one currency</>}
+          {!totals.currency && <> · totals span more than one currency, shown separately</>}
         </>}
         right={<button onClick={() => router.push("/check")} className="btn-primary"><Plus size={15} /> Run account check</button>}
       />
 
       {/* KPI heroes */}
       <div className="grid grid-cols-5 gap-3 mb-5">
-        <KpiHero i={0} label="Total spend" icon={Wallet} value={totals.spend} prefix="$" sub="this month" />
-        <KpiHero i={1} label="Revenue" icon={DollarSign} value={totals.rev} prefix="$"
-        />
-        <KpiHero i={2} label="Blended ROAS" icon={Target} value={totals.roas} decimals={1} suffix="x"
-        />
+        {totals.currency ? (
+          <KpiHero i={0} label="Total spend" icon={Wallet} value={totals.spend} prefix={sym(totals.currency)} sub="this month" />
+        ) : (
+          <KpiHero i={0} label="Total spend" icon={Wallet} rawValue={formatMixed(totals.spendParts)} sub="across currencies" />
+        )}
+        {totals.currency ? (
+          <KpiHero i={1} label="Revenue" icon={DollarSign} value={totals.rev} prefix={sym(totals.currency)} />
+        ) : (
+          <KpiHero i={1} label="Revenue" icon={DollarSign} rawValue={formatMixed(totals.revParts)} sub="across currencies" />
+        )}
+        {/* Blended ROAS is a ratio, so it is only meaningful within ONE currency. */}
+        {totals.currency ? (
+          <KpiHero i={2} label="Blended ROAS" icon={Target} value={totals.roas} decimals={1} suffix="x" />
+        ) : (
+          <KpiHero i={2} label="Blended ROAS" icon={Target} rawValue="—" sub="mixed currencies" />
+        )}
         <KpiHero i={3} label="Active" icon={Activity} rawValue={`${totals.active}`} sub={`${totals.total - totals.active} paused`} />
         <motion.button initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
           onClick={() => router.push("/alerts")}
@@ -182,8 +198,8 @@ export default function Overview() {
                   <Sparkline data={c.spark} color={loser ? "var(--chart-bad)" : c.roas > 3 ? "var(--chart-good)" : "var(--chart1)"} h={34} />
 
                   <div className="grid grid-cols-3 gap-2 mt-3 mb-3">
-                    {(() => { const blank = c.spend === 0; const cs = String(c.id).startsWith("meta_") ? "₹" : "$"; return [
-                      ["Spend", blank ? "—" : `${cs}${c.spend.toLocaleString()}`],
+                    {(() => { const blank = c.spend === 0; return [
+                      ["Spend", blank ? "—" : money(c.spend, c.currency)],
                       ["CTR", blank ? "—" : `${c.ctr}%`],
                       ["Conv", blank ? "—" : String(c.conv)]] as [string, string][]; })().map(([l, v]) => (
                       <div key={l} className="rounded-lg bg-raised px-2 py-1.5">

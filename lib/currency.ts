@@ -23,3 +23,48 @@ export function sym(code: string | null | undefined): string {
 export function money(n: number, code: string | null | undefined): string {
   return `${sym(code)}${Math.round(n).toLocaleString()}`;
 }
+
+/** Compact form for dense UI — ₹1.2M, $4.2k. Keeps the account's symbol. */
+export function moneyShort(n: number, code: string | null | undefined): string {
+  const s = sym(code);
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000) return `${s}${(n / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1)}M`;
+  if (abs >= 1_000) return `${s}${(n / 1_000).toFixed(abs >= 10_000 ? 0 : 1)}k`;
+  return `${s}${Math.round(n)}`;
+}
+
+export interface CurrencyBearing { currency?: string | null; id?: string }
+
+/**
+ * The single currency a set of campaigns shares, or null when they differ.
+ *
+ * Totals across currencies are meaningless — ₹100 + $100 is not 200 of
+ * anything — so callers must use this to decide whether a combined figure can
+ * be shown at all. Campaigns with no reported currency are treated as USD,
+ * matching the seeded dataset.
+ */
+export function commonCurrency(items: CurrencyBearing[]): string | null {
+  const codes = new Set(items.map((c) => String(c.currency || "USD").toUpperCase()));
+  return codes.size === 1 ? (Array.from(codes)[0] as string) : null;
+}
+
+/** Group amounts by currency so a mixed portfolio can be reported honestly
+ *  ("₹82,140 + $9,020") instead of as one invented total. */
+export function sumByCurrency<T extends CurrencyBearing>(
+  items: T[],
+  amount: (item: T) => number,
+): { code: string; total: number }[] {
+  const by = new Map<string, number>();
+  for (const it of items) {
+    const code = String(it.currency || "USD").toUpperCase();
+    by.set(code, (by.get(code) ?? 0) + amount(it));
+  }
+  return Array.from(by.entries())
+    .map(([code, total]) => ({ code, total }))
+    .sort((a, b) => b.total - a.total);
+}
+
+/** Renders a mixed-currency total as separate amounts joined by "+". */
+export function formatMixed(parts: { code: string; total: number }[]): string {
+  return parts.map((p) => money(p.total, p.code)).join(" + ");
+}

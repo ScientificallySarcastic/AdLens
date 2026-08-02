@@ -9,6 +9,7 @@ import PageHeader from "@/components/PageHeader";
 import AISummary from "@/components/AISummary";
 import ChartCard, { TOOLTIP_STYLE, AXIS_TICK } from "@/components/ChartCard";
 import clsx from "clsx";
+import { money } from "@/lib/currency";
 
 function CompareInner() {
   const sp = useSearchParams();
@@ -49,7 +50,7 @@ function CompareInner() {
         </span>
       </div>
       <div className="p-5 grid grid-cols-3 gap-2.5">
-        {([["Spent", `$${c.spend.toLocaleString()}`], ["ROAS", `${c.roas}x`], ["Sales", String(c.conv)]] as [string, string][]).map(([l, v], i) => (
+        {([["Spent", money(c.spend, c.currency)], ["ROAS", `${c.roas}x`], ["Sales", String(c.conv)]] as [string, string][]).map(([l, v], i) => (
           <div key={l} className={clsx("rounded-xl p-3 bg-raised", i === 1 && "ring-1", i === 1 && (win ? "ring-good/40" : "ring-bad/40"))}>
             <div className="text-[10px] font-bold uppercase tracking-wide text-mut mb-1">{l}</div>
             <div className={clsx("font-display num text-[22px] leading-none", i === 1 && (win ? "text-good" : "text-bad"))}>{v}</div>

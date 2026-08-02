@@ -11,6 +11,7 @@ import { campaigns } from "@/lib/data";
 import { KpiHero } from "@/components/KpiHero";
 import HealthScore from "@/components/HealthScore";
 import AISummary from "@/components/AISummary";
+import { sym, commonCurrency, sumByCurrency, formatMixed } from "@/lib/currency";
 
 const stagger = { animate: { transition: { staggerChildren: 0.07 } } };
 const item = { initial: { opacity: 0, y: 14 }, animate: { opacity: 1, y: 0 } };
@@ -24,6 +25,10 @@ export default function Home() {
   const spend = active.reduce((s, c) => s + c.spend, 0);
   const rev = active.reduce((s, c) => s + c.revenue, 0);
   const roas = spend > 0 ? rev / spend : 0;
+  // Only combine money when every active campaign reports the same currency.
+  const portfolioCur = commonCurrency(active);
+  const spendParts = sumByCurrency(active, (c) => c.spend);
+  const revParts = sumByCurrency(active, (c) => c.revenue);
   const critical = active.filter((c) => c.health === "critical").length;
   const watch = active.filter((c) => c.health === "watch").length;
   const healthScore = Math.max(5, Math.round(100 - (critical / active.length) * 220 - (watch / active.length) * 60));
@@ -71,11 +76,20 @@ export default function Home() {
       </AISummary>
 
       {/* ── Portfolio KPIs ────────────────────────────────────── */}
+      {/* Amounts only combine within one currency; a mixed portfolio shows the
+          split rather than a meaningless sum. */}
       <div className="grid grid-cols-4 gap-3 mb-6">
-        <KpiHero i={0} label="Spend / mo" icon={Wallet} value={spend} prefix="$" sub="all active" />
-        <KpiHero i={1} label="Revenue / mo" icon={DollarSign} value={rev} prefix="$" />
-        <KpiHero i={2} label="Blended ROAS" icon={Target} value={roas} decimals={1} suffix="x" />
-        <KpiHero i={3} label="Leaking spend" icon={MousePointerClick} value={1780} prefix="$" delta={`${critical} critical`} deltaTone="bad" sub="below break-even" alert />
+        {portfolioCur
+          ? <KpiHero i={0} label="Spend / mo" icon={Wallet} value={spend} prefix={sym(portfolioCur)} sub="all active" />
+          : <KpiHero i={0} label="Spend / mo" icon={Wallet} rawValue={formatMixed(spendParts)} sub="across currencies" />}
+        {portfolioCur
+          ? <KpiHero i={1} label="Revenue / mo" icon={DollarSign} value={rev} prefix={sym(portfolioCur)} />
+          : <KpiHero i={1} label="Revenue / mo" icon={DollarSign} rawValue={formatMixed(revParts)} sub="across currencies" />}
+        {portfolioCur
+          ? <KpiHero i={2} label="Blended ROAS" icon={Target} value={roas} decimals={1} suffix="x" />
+          : <KpiHero i={2} label="Blended ROAS" icon={Target} rawValue="—" sub="mixed currencies" />}
+        <KpiHero i={3} label="Critical campaigns" icon={MousePointerClick} rawValue={String(critical)}
+          delta={`${watch} watching`} deltaTone="bad" sub="below break-even" alert />
       </div>
 
       {/* ── Action queue ──────────────────────────────────────── */}

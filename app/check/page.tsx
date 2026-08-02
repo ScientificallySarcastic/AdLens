@@ -8,6 +8,7 @@ import { useApp } from "@/lib/store";
 import { PlatBadge, StatusBadge, NoActiveCampaigns } from "@/components/Badge";
 import PageHeader from "@/components/PageHeader";
 import clsx from "clsx";
+import { sym } from "@/lib/currency";
 
 const PLATFORMS = [
   { id: "meta", name: "Meta", color: "#1877F2", enabled: true },
@@ -168,7 +169,7 @@ export default function Check() {
     pid === "meta" ? [...liveAcct, ...(ACCOUNTS[pid] ?? [])] : ACCOUNTS[pid] ?? [];
   const usingLive = String(acctByPlat["meta"] ?? "").startsWith("live");
   const pool = usingLive ? (live?.campaigns ?? []) : campaigns;
-  const curSym = live?.account?.currency === "INR" ? "₹" : "$";
+  const curSym = sym(live?.account?.currency);
   useEffect(() => {
     if (usingLive && live?.campaigns?.length) setCamp(live.campaigns[0].id);
     if (!usingLive) setCamp("summer-sale");
