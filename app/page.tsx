@@ -47,7 +47,14 @@ export default function Landing() {
 
       {/* ── logo ───────────────────────────────────────────── */}
       <header className="relative z-10 px-8 pt-8 sm:px-14 sm:pt-10">
-        <span className="text-[26px] font-bold tracking-[-0.02em] text-[#12142B]">AdLens</span>
+        <div className="flex items-center gap-3">
+          <svg width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
+            <rect x="2" y="17" width="6.5" height="11" rx="3.25" fill="#8B5CF6" />
+            <rect x="11.75" y="10" width="6.5" height="18" rx="3.25" fill="#6366F1" />
+            <rect x="21.5" y="3" width="6.5" height="25" rx="3.25" fill="#4F46E5" />
+          </svg>
+          <span className="text-[26px] font-bold tracking-[-0.02em] text-[#12142B]">AdLens</span>
+        </div>
       </header>
 
       {/* ── hero ───────────────────────────────────────────── */}
@@ -63,27 +70,27 @@ export default function Landing() {
           AdLens helps you analyze your advertising performance across campaigns
           and gives you AI-powered insights that drive better results.
         </p>
-
-        {/* ── CTA ──────────────────────────────────────────── */}
-        <div className="mt-12">
-          <button
-            onClick={() => router.push("/onboard")}
-            className="group inline-flex items-center gap-5 rounded-2xl bg-gradient-to-r from-[#2F4BF0] to-[#8B3FE0] px-11 py-5 text-[1.15rem] font-medium text-white shadow-[0_18px_38px_-12px_rgba(83,63,224,0.55)] transition-all hover:shadow-[0_22px_46px_-12px_rgba(83,63,224,0.65)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#6D5AE6] focus-visible:ring-offset-2"
-          >
-            Get Started
-            <svg width="22" height="16" viewBox="0 0 22 16" fill="none" aria-hidden="true">
-              <path
-                d="M1 8h19m0 0l-6.5-6.5M20 8l-6.5 6.5"
-                stroke="currentColor"
-                strokeWidth="1.6"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="transition-transform duration-200 group-hover:translate-x-0.5"
-              />
-            </svg>
-          </button>
-        </div>
       </main>
+
+      {/* ── CTA ────────────────────────────────────────────── */}
+      <div className="relative z-10 flex justify-end px-8 pb-12 sm:px-14 sm:pb-16">
+        <button
+          onClick={() => router.push("/dashboard")}
+          className="group inline-flex items-center gap-5 rounded-2xl bg-gradient-to-r from-[#2F4BF0] to-[#8B3FE0] px-11 py-5 text-[1.15rem] font-medium text-white shadow-[0_18px_38px_-12px_rgba(83,63,224,0.55)] transition-all hover:shadow-[0_22px_46px_-12px_rgba(83,63,224,0.65)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#6D5AE6] focus-visible:ring-offset-2"
+        >
+          Get Started
+          <svg width="22" height="16" viewBox="0 0 22 16" fill="none" aria-hidden="true">
+            <path
+              d="M1 8h19m0 0l-6.5-6.5M20 8l-6.5 6.5"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="transition-transform duration-200 group-hover:translate-x-0.5"
+            />
+          </svg>
+        </button>
+      </div>
     </div>
   );
 }
